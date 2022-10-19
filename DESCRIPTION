@@ -24,3 +24,4 @@ RoxygenNote: 7.2.1
 LinkingTo: 
     Rcpp,
     RcppArmadillo
+URL: https://nevilleq.github.io/bayesRCM/

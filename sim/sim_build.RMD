@@ -1,0 +1,136 @@
+---
+title: "baesRCM Simulation Build"
+author: "Quinton Neville"
+date: "9/15/2022"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_depth: 2
+  pdf_document: 
+    df_print: paged
+    toc: true
+    toc_depth: 2
+header-includes: \usepackage{graphicx} \usepackage{float} \usepackage{amsmath}
+---
+
+```{r include = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(gt)
+library(MASS)
+library(Rcpp)
+library(RcppArmadillo)
+library(glasso)
+#Working directory for .RMD
+knitr::opts_knit$set(echo = TRUE,
+                     root.dir = rprojroot::find_rstudio_root_file())
+#Controlling figure output in markdown
+knitr::opts_chunk$set(
+#  fig.height =   
+  fig.width = 6,
+#  fig.asp = .5,
+  out.width = "90%",
+#  out.height = 
+ fig.align = "center",
+  cache = FALSE,
+  echo  = TRUE
+)
+#My Colours (from viridis)
+my_purple <- "#440154FF"
+my_yellow <- "#FDE725FF"
+#Set Theme for ggplot2
+theme_set(theme_minimal() + 
+          theme(plot.title = element_text(hjust = 0.5),
+                plot.subtitle = element_text(hjust = 0.5),
+                legend.position = "bottom"))
+#Set Scientific notation output for knitr
+options(scipen = 999)
+```
+
+# 1. Generate Some Simple Data  
+
+Here we generate 10 volumes of multivariate normal data for 10 subjects in a network of 4 rois, with 2 true connections or edges in the associated group graph.  
+```{r sim_data, warning = FALSE}
+#Generate covariance structure for multivariate gaussian covariance matrices 
+volumes  <- 10
+subjects <- 10
+rois     <- 10 #keep it small to start testing
+true_con <- 20 #true connections or no. of edges in G
+#Group overall graph with true_con # of edges 
+G <- 
+  matrix(
+    rbinom(volumes * subjects, 1, prob = true_con / (volumes * subjects)),
+    nrow = volumes
+  )
+diag(G) <- 1
+G <- Matrix::forceSymmetric(G, uplo = "U")
+
+
+#Overall Precision Matrix
+set.seed(4)
+Sigma_0 <- 
+  (G * matrix(rnorm((volumes * subjects), 0, 10), nrow = volumes)) |>
+  Matrix::forceSymmetric(uplo = "U") |>
+  (\(x) {as.matrix(Matrix::nearPD(x)$mat)})()
+
+#Subject precision matrices based off of group
+Sigma_k <- list()
+
+#Fill matrices in list
+for (n in 1:subjects) {
+  set.seed(n)
+  Sigma_k[[n]] <- (Sigma_0 + matrix(rnorm((volumes * subjects), 0.25/n, 1), nrow = volumes)) |>
+  Matrix::forceSymmetric(uplo = "U") |>
+  (\(x) {as.matrix(Matrix::nearPD(x)$mat)})()
+} 
+
+#List of each subject's array in time/by volume
+#randomly generated around mean 0 with subject specific precision
+#i.e. stead state
+data_list <- list()
+
+#Loop through subjects and volumes to generate data
+for (n in 1:subjects) { #assumes no temporal mean trend, centered at 0
+    set.seed(n)
+    data_list[[n]] <- mvtnorm::rmvnorm(volumes, rep(0, rois), Sigma_k[[n]])
+}
+
+#Save 'truth' to evaluate recovery
+Omega_0 <- solve(Sigma_0)
+Omega_k <- map(Sigma_k, solve)
+```
+
+
+# 2. Apply `bayesRCM` package functions to generate posterior samples of the model 
+Source the helper functions from the `./R/` directory. When this is up and running this is equivalent to `library(bayesRCM)`.  
+
+```{r src, echo = TRUE, results = "hide", include = FALSE}
+# #Source the necessary data reading, generating, and aipw model from ./src
+# source_folder <- "./R/"
+# source_files  <- list.files(source_folder, pattern = ".R")
+# 
+# #Iteratively source
+# map(
+#   .x = source_files, 
+#   ~source(str_c(source_folder, .x)) %>%
+#    invisible()
+# )
+# 
+# #For cpp
+# source_cpps <- list.files(source_folder, pattern = ".cpp")
+# sourceCpp(file = str_c(source_folder, source_cpps))
+library(bayesRCM)
+```
+
+## 2.1 Posterior Samples  
+
+Next, let's generate some posterior samples...  
+
+```{r}
+```
+
+## 2.2 Visualize Posterior Samples  
+
+### 2.2.1 Posterior Distribution  
+
+### 2.2.2. Accept/Reject Rates for Proposals  

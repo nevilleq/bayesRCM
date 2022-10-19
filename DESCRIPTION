@@ -1,0 +1,26 @@
+Package: bayesRCM
+Type: Package
+Title: A Bayesian Heirarchical Random Covariance Model (RCM) for Multi-subject Task-based fMRI Analysis 
+Version: 0.1.0
+Authors@R: person("Quinton", "Neville", email = "nevil066@umn.edu",
+                  role = c("aut", "cre"))
+Maintainer: Q <nevil066@umn.edu>
+Description: An efficient heirarchical graphical modeling package for robust Bayesian RCM sampling, diagnostics, inference, and visualization.
+License: MIT 
+Encoding: UTF-8
+LazyData: true
+Depends:
+  R (>= 4.1)
+Imports:
+    tibble,
+    dplyr,
+    ggplot2,
+    Rcpp
+Exports:
+    "example.df"
+Suggests:
+  tidyverse
+RoxygenNote: 7.2.1
+LinkingTo: 
+    Rcpp,
+    RcppArmadillo

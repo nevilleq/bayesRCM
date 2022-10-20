@@ -10,10 +10,8 @@
 #'
 #' @examples
 omega0_update <- function(omega_0, D, nu, lambda_3) {
-  #Grab parameters
-  p        <- nrow(omega_0) #network/graph size
-  indmx    <- matrix(1:p^2, p, p) #Index matrix
-  upperind <- indmx[upper.tri(indmx)]  #Upper triangle of index matrix
+  #Grab parameter (p dim Omega / ROI network)
+  p <- nrow(omega_0) #network/graph size
 
   #A. Sample Diagonal Elements
   for (j in 1:p) {
@@ -37,12 +35,12 @@ omega0_update <- function(omega_0, D, nu, lambda_3) {
 
   #B. Sample off-Diagonal Elements
   #pct accepted via mcmc step-proposal
-  accept <- vector(mode = "numeric", length = 0L)
+  accept <- vector(mode = "logical", length = 0L)
 
   #For upper off diagnonal elements (reordered)
   for (j in 1:(p - 1)) {
     for (l in (j + 1):p) {
-        reorder <- c(setdiff(1:p, c(j,l)), j, l)
+        reorder <- c(setdiff(1:p,c(j,l)),j,l)
         o_pt    <- omega_0[reorder,reorder]
 
         o12 <- o_pt[(p - 1):p, 1:(p - 2)]
@@ -62,7 +60,7 @@ omega0_update <- function(omega_0, D, nu, lambda_3) {
         #Proposal from step-proposal distribution, dependent on bound
         #1. Set up stepwise grid(s) via bound & scale down
         step_size     <- 2 * bound / 100
-        kappa_grid    <- seq(-bound + step / 2, bound, by = step) #Between boundary
+        kappa_grid    <- seq((step_size / 2) - bound, bound, by = step_size) #Between boundary
 
         #Compute the log_prob over grid, scale down, and obtain normalizing constant relative to stepsize
         log_prob_grid <- g0_log_density(kappa_grid, nu, a, b, D_c) - lambda_3 * abs(kappa_grid - c)
@@ -79,7 +77,7 @@ omega0_update <- function(omega_0, D, nu, lambda_3) {
           #If less than prob, shrink to zero (see 4. below, s-c=0)
           if (runif(1) < prob) {
             #Update sample, proposal, density
-            step  <- c #Set to c, which will shrink update to zero below
+            prop  <- c #Set to c, which will shrink update to zero below
             q_new <- 1 #w/probability 1
             p_new <- 1 #w/probability 1
           } else {
@@ -87,32 +85,32 @@ omega0_update <- function(omega_0, D, nu, lambda_3) {
             grid_prop <- sample(kappa_grid, 1, prob = exp(log_prob_grid)) #sample along step function
 
             #Update sample, proposal, density
-            step  <- grid_prop + (runif(1) - 0.5) * step_size #Discrete MH step proposal
+            prop  <- grid_prop + (runif(1) - 0.5) * step_size #Discrete MH step proposal
             q_new <- g0_log_density(grid_prop, nu, a, b, D_c) - lambda_3 * abs(grid_prop - c) #step-function sample
-            p_new <- g0_log_density(s, nu, a, b, D_c) - lambda_3 * abs(s - c) #proposal
+            p_new <- g0_log_density(prop, nu, a, b, D_c) - lambda_3 * abs(prop - c) #proposal
           }
         } else { #3. If interval does not include c, do same as else{} above & generate proposal
             #Generate from proposal grid
             grid_prop <- sample(kappa_grid, 1, prob = exp(log_prob_grid)) #sample along step function
 
             #Update sample, proposal, density
-            step  <- grid_prop + (runif(1) - 0.5) * step_size #Discrete MH step proposal
+            prop  <- grid_prop + (runif(1) - 0.5) * step_size #Discrete MH step proposal
             q_new <- g0_log_density(grid_prop, nu, a, b, D_c) - lambda_3 * abs(grid_prop - c) #probability of step-function sample
-            p_new <- g0_log_density(s, nu, a, b, D_c) - lambda_3 * abs(s - c) #probability of proposal
+            p_new <- g0_log_density(prop, nu, a, b, D_c) - lambda_3 * abs(prop - c) #probability of proposal
         }
 
         #4. Calculate the posterior density p_dens, proposal density q_dens of current value
         current <- omega_0[j,l] + c
 
-        if (abs*omega_0[j,l] < 0.0001) {
+        if (abs(omega_0[j,l]) < 0.001) {
           #Accept with probability 1
           q_cur <- 1
           p_cur <- 1
         } else {
           #Find closest grid index to current value
-          grid_ind <- which.min(abs(kappa_grid - kappa_cur))
+          grid_ind <- which.min(abs(kappa_grid - current))
           q_cur    <- g0_log_density(kappa_grid[grid_ind], nu, a, b, D_c) - lambda_3 * abs(kappa_grid[grid_ind] - c)
-          q_cur    <- g0_log_density(current, nu, a, b, D_c) - lambda_3 * abs(current - c)
+          p_cur    <- g0_log_density(current, nu, a, b, D_c) - lambda_3 * abs(current - c)
         }
 
         #5. MH-step
@@ -122,7 +120,7 @@ omega0_update <- function(omega_0, D, nu, lambda_3) {
         #If accepted
         if(runif(1) < exp(log_ratio)) {
           #Update omega_0 entry
-          omega_0[j, l] <- omega_0[l, j] <- step - c
+          omega_0[j, l] <- omega_0[l, j] <- prop - c
           accept    <- c(accept, TRUE)
         } else {
           accept    <- c(accept, FALSE)

@@ -66,12 +66,24 @@ double log_iwishart_InvA_const(double df, arma::mat S){
 
 // [[Rcpp::export]]
 double log_J(double h, arma::mat B, double a11){
-  double y; arma::mat B1;
+  double y, a_temp; arma::mat B1;
   const double pi=std::atan(1.0)*4;
   B1 = B(1,1);
-  y =  log(2*pi/B(1,1))/2-log_iwishart_InvA_const(h,B1)+
-    (h-1)/2*log(a11)-(B(0,0)-pow(B(0,1),2)/B(1,1))*a11/2;
+  if (a11 < 0) {
+    a_temp = 1;
+  } else {
+    a_temp = a11;
+  }
+  y = log(2*pi/B(1,1))/2-log_iwishart_InvA_const(h,B1)+
+    (h-1)/2*log(a_temp)-(B(0,0)-pow(B(0,1),2)/B(1,1))*a11/2;
+  //when a11 is negative this evaluate to nan
   return(y);
+  
+  //print test
+  //Rcpp::Rcout << "a11: " << a11 << std::endl;
+  //Rcpp::Rcout << "y:"  << y << std::endl;
+  //Rcpp::Rcout << "a_temp:" << a_temp << std::endl;
+  
 }
 
 // [[Rcpp::export]]
@@ -88,7 +100,7 @@ double log_H(double nu, arma::mat V, arma::mat Omega, int i, int j){
   Omega0_ij << Omega(i-1,i-1) << 0 << arma::endr << 0 << c(0,0) << arma::endr;
   
   // (i,j) = 1, note j>i
-  arma::mat Omega1_ij, Ome11, A;
+  arma::mat Omega1_ij, Ome11, A, test;
   Ome12 = Omega;
   Ome12.swap_rows(i,j-1);  Ome12 = Ome12.rows(i-1,i);
   Ome12.shed_cols(j-1,j-1); Ome12.shed_cols(i-1,i-1);
@@ -100,11 +112,34 @@ double log_H(double nu, arma::mat V, arma::mat Omega, int i, int j){
   
   Ome11 << Omega(i-1,i-1) << Omega(i-1,j-1)  << arma::endr << Omega(i-1,j-1)  << Omega(j-1,j-1)  << arma::endr;
   A = Ome11-Omega1_ij;
+  test << 0 << 0 << arma::endr << 0 << 1 << arma::endr;
   
-  double a11, f; arma::mat V_ij, V_jj;
+  //Need to fix log(det(Omega))
+  double a11, f, det_0, det_1; arma::mat V_ij, V_jj;
   a11 = A(0,0); V_jj = V(j-1,j-1);
   V_ij << V(i-1,i-1) << V(i-1,j-1)  << arma::endr << V(i-1,j-1)  << V(j-1,j-1)  << arma::endr;
-  f = -log_iwishart_InvA_const(nu,V_jj)-log_J(nu,V_ij,a11) + (nu-2)/2*(log(a11))  - trace(V_ij*(Omega0_ij-Omega1_ij))/2;
+  det_0 = det(Omega0_ij);
+  if(det_0 < 0) {
+    det_0 = 1;
+  }
+  det_1 = det(Omega1_ij);
+  f = -log_iwishart_InvA_const(nu,V_jj) - log_J(nu,V_ij,a11) + (nu-2)/2*(log(det_0) - log(det_1)) - trace(V_ij*(Omega0_ij-Omega1_ij))/2;
+  
+  //print test
+  Rcpp::Rcout << "a11: " << a11 << std::endl;
+  Rcpp::Rcout << "f:"  << f << std::endl;
+  Rcpp::Rcout << "nu:" << nu << std::endl;
+  Rcpp::Rcout << "V_jj: " << V_jj << std::endl;
+  Rcpp::Rcout << "V_ij: " << V_ij << std::endl;
+  Rcpp::Rcout << "Omega0_ij: " << Omega0_ij << std::endl;
+  Rcpp::Rcout << "Ome11: " << Ome11 << std::endl;
+  Rcpp::Rcout << "Omega1_ij: " << Omega1_ij << std::endl;
+  Rcpp::Rcout << "det_0 " << det_0 << std::endl;
+  Rcpp::Rcout << "det_1 " << det_1 << std::endl;
+  Rcpp::Rcout << "Constant" << log_iwishart_InvA_const(nu,V_jj) << std::endl;
+  Rcpp::Rcout << "Log_J" << log_J(nu,V_ij,a11) << std::endl;
+  Rcpp::Rcout << "Trace" << trace(V_ij*(Omega0_ij-Omega1_ij))/2 << std::endl;
+  
   
   return(f);
 }

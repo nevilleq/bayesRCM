@@ -12,7 +12,7 @@
 #' @examples
 #' rcm::example_data_list
 #' rcm(example_data_list)
-rcm <- function(y = data_list, priors = NULL, n_samples = 10, n_burn = 1, n_cores = 4) {
+rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_cores = 4, n_updates = 2) {
 
   #library(Rcpp)
   #library(RcppArmadillo)
@@ -40,7 +40,7 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 10, n_burn = 1, n_core
 
   #Set tau's MH stepsize
   step_tau  <- rep(1, K)
-  n_updates <- 10
+  n_updates <- floor(n_samples / n_updates)
 
   #Initialize estimates for Omega_k, Omega_0
   #Omega_k - tune lambda by bic and then grab G and Omega_0

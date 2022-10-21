@@ -147,11 +147,12 @@ Here, we fix all MCMC, graph updates, and/or non-direct sampling components of t
 
 ### 2.2.1 $\Omega_0$ with fixed $\tau_k$    
 
-```{r omega_0, eval = FALSE}
+```{r omega_0, eval = FALSE, echo = FALSE}
 #Set params
 y <- data_list
-n_samples <- 100
-n_burn <- 10
+n_samples <- 1000
+n_burn <- 100
+n_updates <- 10
     
   #Grab no. of subjects, rois, volumes
   K  <- length(y)
@@ -165,7 +166,7 @@ n_burn <- 10
 
   #Set tau's MH stepsize
   step_tau  <- rep(1, K)
-  n_updates <- 10
+  #n_updates <- 10
 
   #Initialize estimates for Omega_k, Omega_0
   #Omega_k - tune lambda by bic and then grab G and Omega_0
@@ -305,7 +306,7 @@ n_burn <- 10
 result <- read_rds("../results/prelim_omega0.RDS")
 n_iter <- ncol(result$omega_0)
 set.seed(4)
-samp  <- sample(1:nrow(result$omega_0), 20, replace = FALSE)
+samp  <- sample(1:nrow(result$omega_0), 25, replace = FALSE)
 
 #Diagnostics
 chain0.gg <- 
@@ -327,14 +328,16 @@ chain0.gg <-
   ggplot(aes(x = as.numeric(iteration), y = value, colour = upper_tri, group = upper_tri)) +
   geom_point(size = 0.8, alpha = 0.6) +
   geom_line(size = 0.6, alpha = 0.8) +
+  facet_wrap(~upper_tri, scales = "free_y", nrow = 5) +
   theme_minimal() +
-  scale_colour_viridis_c("Pair") +
+  theme(legend.position = "none") +
+  scale_colour_viridis_c() +
   labs(
     x = "Iteration",
     y = "Value",
     title = "Omega_0 Chain with Fixed tau_k and G_k/Omega_k"
   ) +
-  scale_x_continuous(breaks = seq(0, n_iter, by = 10), minor_breaks = seq(0, n_iter, by = 20))
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter)))
 
 
 #Acceptance
@@ -352,14 +355,14 @@ accept0.gg <-
   )
 ```
 
-```{r omega0_diag_display, echo = FALSE}
+```{r omega0_diag_display, echo = FALSE, fig.height=6, fig.width=6}
 chain0.gg
 accept0.gg
 ```
 
 ### 2.2.2 $\Omega_0$ with free $\tau_k$  
 
-```{r omega_0_tauk, eval = FALSE}
+```{r omega_0_tauk, eval = FALSE, echo = FALSE}
 #Set params
 y <- data_list
 n_samples <- 100
@@ -377,7 +380,7 @@ n_burn <- 20
 
   #Set tau's MH stepsize
   step_tau  <- rep(1, K)
-  n_updates <- 5
+  #n_updates <- 5
 
   #Initialize estimates for Omega_k, Omega_0
   #Omega_k - tune lambda by bic and then grab G and Omega_0
@@ -541,7 +544,7 @@ n_burn <- 20
 result <- read_rds("../results/prelim_omega0_tauk.RDS")
 n_iter <- ncol(result$omega_0)
 set.seed(4)
-samp  <- sample(1:nrow(result$omega_0), 10, replace = FALSE)
+samp  <- sample(1:nrow(result$omega_0), 25, replace = FALSE)
 
 #Diagnostics
 chain0.gg <- 
@@ -563,14 +566,18 @@ chain0.gg <-
   ggplot(aes(x = as.numeric(iteration), y = value, colour = upper_tri, group = upper_tri)) +
   geom_point(size = 0.8, alpha = 0.6) +
   geom_line(size = 0.6, alpha = 0.8) +
+  facet_wrap(~upper_tri, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  scale_y_continuous(labels = scales::scientific) +
   theme_minimal() +
-  scale_colour_viridis_c("Pair") +
+  theme(legend.position = "none") +
+  scale_colour_viridis_c() +
   labs(
     x = "Iteration",
     y = "Value",
-    title = "Omega_0 Chain with Fixed tau_k and G_k/Omega_k"
-  ) +
-  scale_x_continuous(breaks = seq(0, n_iter, by = 10), minor_breaks = seq(0, n_iter, by = 20))
+    title = "Omega_0 Chain with Fixed G_k/Omega_k and Free Tau_k"
+  )
 
 #Acceptance
 accept0.gg <- 
@@ -608,14 +615,16 @@ tauk.gg <-
   ggplot(aes(x = iteration, y = value, colour = tau)) +
   geom_point(size = 0.8, alpha = 0.6) +
   geom_line(size = 0.6, alpha = 0.8) +
+  facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
   theme_minimal() +
-  scale_colour_viridis_d("Tau") +
+  theme(legend.position = "none") +
   labs(
     x = "Iteration",
     y = "Value",
     title = "Tau_k Chain with Fixed G_k/Omega_k, Varied Omega_0"
-  ) +
-  scale_x_continuous(breaks = seq(0, n_iter, by = 10), minor_breaks = seq(0, n_iter, by = 20))
+  )
 
 #Tau_k acceptance
 tauk_acc.gg <-
@@ -655,7 +664,7 @@ result$tau_acc %>%
   theme_minimal()
 ```
 
-```{r omega0_tauk_diag_display, echo = FALSE}
+```{r omega0_tauk_diag_display, echo = FALSE, fig.height = 6, fig.width = 6}
 chain0.gg
 accept0.gg
 tauk.gg
@@ -664,7 +673,7 @@ tauk_acc.gg
 
 ### 2.2.3 $\tau_k$  
 
-```{r tauk, eval = FALSE}
+```{r tauk, eval = FALSE, echo = FALSE}
 #Set params
 y <- data_list
 n_samples <- 100
@@ -682,7 +691,7 @@ n_burn <- 20
 
   #Set tau's MH stepsize
   step_tau  <- rep(1, K)
-  n_updates <- 5
+  #n_updates <- 5
 
   #Initialize estimates for Omega_k, Omega_0
   #Omega_k - tune lambda by bic and then grab G and Omega_0
@@ -866,14 +875,17 @@ tauk.gg <-
   ggplot(aes(x = iteration, y = value, colour = tau)) +
   geom_point(size = 0.8, alpha = 0.6) +
   geom_line(size = 0.6, alpha = 0.8) +
+  facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
   theme_minimal() +
-  scale_colour_viridis_d("Tau") +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
   labs(
     x = "Iteration",
     y = "Value",
     title = "Tau_k Chain with Fixed G_k/Omega_k, Varied Omega_0"
-  ) +
-  scale_x_continuous(breaks = seq(0, n_iter, by = 10), minor_breaks = seq(0, n_iter, by = 20))
+  )
 
 #Tau_k acceptance
 tauk_acc.gg <-
@@ -913,7 +925,7 @@ result$tau_acc %>%
   theme_minimal()
 ```
 
-```{r omega0_tauk_diag_display, echo = FALSE}
+```{r tauk_diag_display, echo = FALSE, fig.height=6, fig.width=6}
 tauk.gg
 tauk_acc.gg
 result$tau_step %>%

@@ -147,12 +147,12 @@ Here, we fix all MCMC, graph updates, and/or non-direct sampling components of t
 
 ### 2.2.1 $\Omega_0$ with fixed $\tau_k$    
 
-```{r omega_0, eval = FALSE, echo = FALSE}
+```{r omega_0, eval = TRUE, echo = FALSE}
 #Set params
 y <- data_list
-n_samples <- 1000
-n_burn <- 100
-n_updates <- 10
+n_samples <- 10000
+n_burn <- 1000
+n_updates <- 50
     
   #Grab no. of subjects, rois, volumes
   K  <- length(y)
@@ -234,7 +234,7 @@ n_updates <- 10
   #Loop through sampling algorithm n_samples + n_burn # times
   for (t in 1:n_iter) {
     #Print iteration for early testing
-    print(paste0("Iteration: ", t))
+    #print(paste0("Iteration: ", t))
     
     #Update Lambdas via direct sampling
     #Lambda 1 sparsity-inducing penalty on G_k
@@ -363,11 +363,6 @@ accept0.gg
 ### 2.2.2 $\Omega_0$ with free $\tau_k$  
 
 ```{r omega_0_tauk, eval = FALSE, echo = FALSE}
-#Set params
-y <- data_list
-n_samples <- 100
-n_burn <- 20
-    
   #Grab no. of subjects, rois, volumes
   K  <- length(y)
   p  <- ncol(y[[1]])
@@ -673,12 +668,7 @@ tauk_acc.gg
 
 ### 2.2.3 $\tau_k$  
 
-```{r tauk, eval = FALSE, echo = FALSE}
-#Set params
-y <- data_list
-n_samples <- 100
-n_burn <- 20
-    
+```{r tauk, eval = TRUE, echo = FALSE}
   #Grab no. of subjects, rois, volumes
   K  <- length(y)
   p  <- ncol(y[[1]])
@@ -884,7 +874,7 @@ tauk.gg <-
   labs(
     x = "Iteration",
     y = "Value",
-    title = "Tau_k Chain with Fixed G_k/Omega_k, Varied Omega_0"
+    title = "Tau_k Chain with Fixed G_k/Omega_k and Omega_0"
   )
 
 #Tau_k acceptance
@@ -918,7 +908,7 @@ result$tau_acc %>%
   labs(
     x = "Subject",
     y = "Tau Acceptance",
-    title = "Tau Acceptance for Fixed G_k/Omega_k but Varied Omega_0"
+    title = "Tau Acceptance for Fixed G_k/Omega_k and Omega_0"
   ) +
   theme(legend.position = "left") +
   coord_flip() +

@@ -16,8 +16,8 @@ tau_update <- function(tau_k, omega_k, omega_0, lambda_2, window) {
   tau_prop  <- tau_k * exp(rnorm(1, sd = window))
 
   #Compute MH transition probability
-  log_diff  <- log_tau_posterior(tau_prop, omega_k, omega_0,lambda_2) - log_tau_posterior(tau_k, omega_k, omega_0,lambda_2)
-  prop_diff <- dlnorm(tau_k, log(tau_prop), window, log = TRUE) - dlnorm(log(tau_prop), tau_k, window, log = TRUE)
+  log_diff  <- log_tau_posterior(tau_prop, omega_k, omega_0, lambda_2) - log_tau_posterior(tau_k, omega_k, omega_0, lambda_2)
+  prop_diff <- dlnorm(tau_k, log(tau_prop), window, log = TRUE) - dlnorm(tau_prop, log(tau_k), window, log = TRUE)
 
   #MH Step
   if (log(runif(1)) < (log_diff + prop_diff)) {

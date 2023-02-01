@@ -21,16 +21,14 @@ omega0_update <- function(omega_0, D, nu, lambda_3) {
       o12 <- matrix(o_pt[p,-p], nrow = 1)
       o2i <- matinv(o_pt[-p,-p])
 
-      c <- matABA(o12, o2i)             # Sig12 %*% Sig2.i %*% t(Sig12)
+      c <- matABA(o12, o2i)             
 
       tmp <- matrix(c(matprod(o12, o2i), -1), nrow = 1)
       d   <- matABA(tmp, D[reorder, reorder])   # tmp %*% D[reorder,reorder] %*% t(tmp)
-      D_r <- D[reorder, reorder]
+      #D_r <- D[reorder, reorder]
 
       omega_0[j,j] <- GIGrvg::rgig(1, 1 - nu/2, d, lambda_3) + c #verify rgig documentation
-      #omega_0[j,j] <- rWishart(1, nu, D) + c
-      #omega_0[j,j] <- rchisq(1, nu) / d + c
-      #omega_0[j,j] <- rchisq(1, nu) / D_r[j, j] + c
+      #Checked with documentation vs. paper, appears to be parameterized the same
   }
 
   #B. Sample off-Diagonal Elements
@@ -71,7 +69,7 @@ omega0_update <- function(omega_0, D, nu, lambda_3) {
         #2. If 0 lies between the boundary -- (p_new = density, q_new = proposal, step = update)
         if (abs(c) < bound) {
           #Grab probability for MH-step
-          tmp  <- g0_log_density(c, nu, a, b, D_c) - log(lambda_3) - scale_max
+          tmp  <- g0_log_density(c, nu, a, b, D_c) - log(lambda_3 / 2) - scale_max - log(norm_const) #logit
           prob <- 1 / (1 + exp(-tmp)) #expit
 
           #If less than prob, shrink to zero (see 4. below, s-c=0)
@@ -149,7 +147,7 @@ omega0_update <- function(omega_0, D, nu, lambda_3) {
 g0_log_density <- function(kappa, nu, a, b, D) {
   #calculate log of g function(step, bounds (a,b))
   delta <- kappa^2/(a*b)
-  res <- -nu/2*log(1-delta) - (D[1,1]/a+D[2,2]/b-2*D[1,2]*kappa/(a*b))/(1-delta)/2
+  res   <- -nu/2*log(1-delta) - (D[1,1]/a+D[2,2]/b-2*D[1,2]*kappa/(a*b))/(1-delta)/2
   return(res)
 }
 

@@ -96,7 +96,7 @@ double log_H(double nu, arma::mat V, arma::mat Omega, int i, int j){
   Ome12 = Omega0.row(j-1); Ome12.shed_cols(j-1,j-1);
   Ome22 = Omega0;
   Ome22.shed_rows(j-1,j-1); Ome22.shed_cols(j-1,j-1);
-  c = Ome12*solve(Ome22,Ome12.t());
+  c = Ome12*solve(Ome22,Ome12.t()); // check
   Omega0_ij << Omega(i-1,i-1) << 0 << arma::endr << 0 << c(0,0) << arma::endr;
   
   // (i,j) = 1, note j>i
@@ -108,7 +108,7 @@ double log_H(double nu, arma::mat V, arma::mat Omega, int i, int j){
   Ome22 = Omega;
   Ome22.shed_rows(j-1,j-1); Ome22.shed_rows(i-1,i-1);
   Ome22.shed_cols(j-1,j-1); Ome22.shed_cols(i-1,i-1);
-  Omega1_ij = Ome12*solve(Ome22,Ome12.t());
+  Omega1_ij = Ome12*solve(Ome22,Ome12.t()); //check
   
   Ome11 << Omega(i-1,i-1) << Omega(i-1,j-1)  << arma::endr << Omega(i-1,j-1)  << Omega(j-1,j-1)  << arma::endr;
   A = Ome11-Omega1_ij;
@@ -119,9 +119,9 @@ double log_H(double nu, arma::mat V, arma::mat Omega, int i, int j){
   a11 = A(0,0); V_jj = V(j-1,j-1);
   V_ij << V(i-1,i-1) << V(i-1,j-1)  << arma::endr << V(i-1,j-1)  << V(j-1,j-1)  << arma::endr;
   det_0 = det(Omega0_ij);
-  if(det_0 < 0) {
-    det_0 = 1;
-  }
+  // if(det_0 < 0) {
+  //   det_0 = 1;
+  // }
   det_1 = det(Omega1_ij);
   f = -log_iwishart_InvA_const(nu,V_jj) - log_J(nu,V_ij,a11) + (nu-2)/2*(log(det_0) - log(det_1)) - trace(V_ij*(Omega0_ij-Omega1_ij))/2;
   

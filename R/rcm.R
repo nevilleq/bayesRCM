@@ -119,8 +119,8 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
     lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
 
     #Lambda 3 Sparse L-1 penalty on group precision omega_0 prior
-    card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges
-    lambda_3 <- rgamma(1, alpha[3] + card_0, beta[3] + norm(omega_0, type = "1"))
+    card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges or non-zero elements
+    lambda_3 <- rgamma(1, alpha[3] + card_0, beta[3] + sum(abs(omega_0))/2)
 
     #Invert for Covariance & randomly select row_col pair
     sigma_0 <- matinv(omega_0)
@@ -210,7 +210,7 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
      }
 
     #Update Omega_0 via Wang and Li (2012) + step-proposal distribution
-    D       <- apply(mapply('/', omega_k, tau_vec, SIMPLIFY = 'array'), 1:2, sum)
+    D       <- apply(mapply('*', omega_k, tau_vec, SIMPLIFY = 'array'), 1:2, sum)
     omega_0 <- omega0_update(omega_0, D, sum(tau_vec), lambda_3)
     pct_accept <- omega_0$pct_accept #Off-diagonal acceptance%
     omega_0 <- omega_0$omega #Precision matrix itself

@@ -37,13 +37,7 @@ graph_update <- function(row_col, df, D, v, S, adj, omega, lambda_1) {
         #1. Propose G'
         #a. calculate the logit of no edge vs an edge (p is prob of having no edge)
         w <- log_H(b_post, D_post, omega, i, j) + lambda_1
-        #If H < 0, log_H NaN; H > 0 (-Inf, Inf)
-        # if (is.nan(w)) {
-        #   print(j)
-        #   warning("warning log_H NaN")
-        #   w <- -Inf # Means proposal is always a new edge, Inf would be auto no edge
-        #   # Or should we just auto reject the proposal period?
-        # }
+
         #Obtain probability of edge
         p <- 1 / (1 + exp(w)) #expit --> probability of edge
         ij_cur  <- adj[i, j]

@@ -70,10 +70,10 @@ graph_update <- function(row_col, df, D, v, S, adj, omega, lambda_1) {
                 omega <- gwish_ij_update(b_post, D_post, omega, i, j, ij_cur)
 
                 # If omega update is not symmetric, force symmetry by upper triangle via Matrix package
-                if (!Matrix::isSymmetric(omega)) {
-                  #print('Asymetric proposition, forcing symmetric with Matrix::forceSymmetric()')
-                  omega <- Matrix::forceSymmetric(omega, uplo = "U") #Determined by upper triangle
-                }
+                # if (!Matrix::isSymmetric(omega)) {
+                #   #print('Asymetric proposition, forcing symmetric with Matrix::forceSymmetric()')
+                #   omega <- Matrix::forceSymmetric(omega, uplo = "U") #Determined by upper triangle
+                # }
             }
         }
 
@@ -127,17 +127,17 @@ gwish_ij_update <- function(b, D, omega, i, j, ij_cur) {
         reorder <- c(setdiff(1:p, c(i,j)), i, j)
         o_pt    <- omega[reorder, reorder]
         
-        #Check to make sure symmetric, if not force by upper diag? (or lower?)
-        if (!isSymmetric(o_pt)) {
-          print("Not symmetric")
-          o_pt <- as.matrix(Matrix::forceSymmetric(o_pt, uplo = "U"))
-        }
+        # #Check to make sure symmetric, if not force by upper diag? (or lower?)
+        # if (!isSymmetric(o_pt)) {
+        #   print("Not symmetric")
+        #   o_pt <- as.matrix(Matrix::forceSymmetric(o_pt, uplo = "U"))
+        # }
         
-        #Check to make sure PD
-        if (any(eigen(o_pt)$values < 0)) {
-          o_pt <- o_pt |>
-            (\(x) {as.matrix(Matrix::nearPD(x)$mat)})() 
-        }
+        # #Check to make sure PD
+        # if (any(eigen(o_pt)$values < 0)) {
+        #   o_pt <- o_pt |>
+        #     (\(x) {as.matrix(Matrix::nearPD(x)$mat)})() 
+        # }
         
         #Cholesky decomp (must be Sym, PD)
         #print(o_pt)

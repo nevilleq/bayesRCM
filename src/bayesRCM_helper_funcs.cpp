@@ -93,49 +93,73 @@ double log_H(double nu, arma::mat V, arma::mat Omega, int i, int j){
   arma::mat c;
   Omega0 = Omega;
   Omega0(i-1,j-1) = 0;  Omega0(j-1,i-1) = 0;
-  Ome12 = Omega0.row(j-1); Ome12.shed_cols(j-1,j-1);
+  Ome12 = Omega0.row(j-1); 
+  Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
+  Ome12.shed_cols(j-1,j-1);
+  Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
   Ome22 = Omega0;
   Ome22.shed_rows(j-1,j-1); Ome22.shed_cols(j-1,j-1);
+  Rcpp::Rcout << "Ome22: " << Ome22 << std::endl;
   c = Ome12*solve(Ome22,Ome12.t()); // check
+  if(c(0,0) == 0) {
+    c(0,0) = 0.0000001;
+  }
+  Rcpp::Rcout << "c: " << c << std::endl;
   Omega0_ij << Omega(i-1,i-1) << 0 << arma::endr << 0 << c(0,0) << arma::endr;
+  Rcpp::Rcout << "Omega0_ij: " << Omega0_ij << std::endl;
   
   // (i,j) = 1, note j>i
   arma::mat Omega1_ij, Ome11, A, test;
   Ome12 = Omega;
   Ome12.swap_rows(i,j-1);  Ome12 = Ome12.rows(i-1,i);
+  Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
   Ome12.shed_cols(j-1,j-1); Ome12.shed_cols(i-1,i-1);
+  Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
   
   Ome22 = Omega;
   Ome22.shed_rows(j-1,j-1); Ome22.shed_rows(i-1,i-1);
+  Rcpp::Rcout << "Ome22: " << Ome22 << std::endl;
   Ome22.shed_cols(j-1,j-1); Ome22.shed_cols(i-1,i-1);
+  Rcpp::Rcout << "Ome22: " << Ome22 << std::endl;
   Omega1_ij = Ome12*solve(Ome22,Ome12.t()); //check
+  if(Omega1_ij(1,1) == 0) {
+    Omega1_ij(1,1) = 0.0000001;
+  } 
+  if(Omega1_ij(0,0) == 0) {
+    Omega1_ij(0,0) = 0.0000001;
+  } 
   
   Ome11 << Omega(i-1,i-1) << Omega(i-1,j-1)  << arma::endr << Omega(i-1,j-1)  << Omega(j-1,j-1)  << arma::endr;
+  Rcpp::Rcout << "Ome11: " << Ome11 << std::endl;
   A = Ome11-Omega1_ij;
-  test << 0 << 0 << arma::endr << 0 << 1 << arma::endr;
+  Rcpp::Rcout << "A: " << A << std::endl;
+  //test << 0 << 0 << arma::endr << 0 << 1 << arma::endr;
   
   //Need to fix log(det(Omega))
   double a11, f, det_0, det_1; arma::mat V_ij, V_jj;
   a11 = A(0,0); V_jj = V(j-1,j-1);
   V_ij << V(i-1,i-1) << V(i-1,j-1)  << arma::endr << V(i-1,j-1)  << V(j-1,j-1)  << arma::endr;
-  det_0 = det(Omega0_ij);
-  // if(det_0 < 0) {
-  //   det_0 = 1;
-  // }
-  det_1 = det(Omega1_ij);
+  Rcpp::Rcout << "V_ij: " << V_ij << std::endl;
+  Rcpp::Rcout << "V_jj: " << V_jj << std::endl;
+  det_0 = matdet(Omega0_ij);
+  det_1 = matdet(Omega1_ij);
+  //Handle case when det may be < 0 due to imputing small number in Omega0_ij, Omega1_ij;
+  if(det_0 < 0) {
+    det_0 = 0.001;
+  }
+  if(det_1 < 0) {
+    det_1 = 0.001;
+  }
+  //check determinants
+  Rcpp::Rcout << "Omega0_ij: " << Omega0_ij << std::endl;
+  Rcpp::Rcout << "det_0 " << det_0 << std::endl;
+  Rcpp::Rcout << "Omega1_ij: " << Omega1_ij << std::endl;
+  Rcpp::Rcout << "det_1 " << det_1 << std::endl;
   f = -log_iwishart_InvA_const(nu,V_jj) - log_J(nu,V_ij,a11) + (nu-2)/2*(log(det_0) - log(det_1)) - trace(V_ij*(Omega0_ij-Omega1_ij))/2;
   
   //print test
-  Rcpp::Rcout << "a11: " << a11 << std::endl;
+  Rcpp::Rcout << "a11:"  << a11 << std::endl;
   Rcpp::Rcout << "f:"  << f << std::endl;
-  Rcpp::Rcout << "nu:" << nu << std::endl;
-  Rcpp::Rcout << "V_jj: " << V_jj << std::endl;
-  Rcpp::Rcout << "V_ij: " << V_ij << std::endl;
-  Rcpp::Rcout << "Omega0_ij: " << Omega0_ij << std::endl;
-  Rcpp::Rcout << "Ome11: " << Ome11 << std::endl;
-  Rcpp::Rcout << "Omega1_ij: " << Omega1_ij << std::endl;
-  Rcpp::Rcout << "det_0 " << det_0 << std::endl;
-  Rcpp::Rcout << "det_1 " << det_1 << std::endl;
   Rcpp::Rcout << "Constant" << log_iwishart_InvA_const(nu,V_jj) << std::endl;
   Rcpp::Rcout << "Log_J" << log_J(nu,V_ij,a11) << std::endl;
   Rcpp::Rcout << "Trace" << trace(V_ij*(Omega0_ij-Omega1_ij))/2 << std::endl;

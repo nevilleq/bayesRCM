@@ -13,7 +13,9 @@
 #' rcm::example_data_list
 #' rcm(example_data_list)
 rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_cores = 4, n_updates = 2) {
-
+   # sim_res <- sim_data(subjects = 20, volumes = 200, rois = 10, alpha_tau = 20, lambda_2 = 2/5,
+   #                     prop_true_con = 1/5, n_flip = 1, write = FALSE)
+   # y = sim_res$data_list; priors = NULL; n_samples = 100; n_burn = 0; n_cores = 4; n_updates = 2;
   #library(Rcpp)
   #library(RcppArmadillo)
   #library(GIGrvg)
@@ -35,39 +37,32 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
   Sk <- map(.x = y, ~t(.x) %*% .x)
 
   #Set lambda 1-3 penalty gamma a, b  hyperparams
-  alpha <- c(0.5, 1, 0.5) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
-  beta  <- c(0.5, 1, 0.5)
+  alpha <- c(1, 2, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1, 0.25, 1)
+  
+  #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
+  alpha_tau <- K
+  lambda_2  <- alpha_tau / 50
 
   #Set tau's MH stepsize
-  step_tau  <- rep(1, K)
+  step_tau  <- rep(0.1, K)
   n_updates <- floor(n_samples / n_updates)
 
   #Initialize estimates for Omega_k, Omega_0
   #Omega_k - tune lambda by bic and then grab G and Omega_0
-  lambda_grid <- 10^seq(-3, 0, length.out = 10)
+  lambda_grid <- 10^seq(-1, 0.5, length.out = 20)
   bic         <- vector(mode = "numeric", length = 0)
 
   #Tune lambda for independent glasso
   for (lam in lambda_grid) {
-    omega_k <- ind_graphs(y, 0.1)
+    omega_k <- ind_graphs(y, lam)
     bic   <- c(bic, bic_cal(y, omega_k))
   }
-  #Compute initial est. via best bic
+  #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0
   omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
-  
-  #Loop through just to make sure PD
-  for (k in 1:K) {
-    if (any(eigen(omega_k[[k]])$values < 0)) {
-      #print(k)
-      omega_k[[k]] <- 
-        omega_k[[k]] |>
-        (\(x) {as.matrix(Matrix::nearPD(x)$mat)})()
-    }
-  }
-  
   adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
-  #Omega0  <- apply(abind::abind(omega_k, along=3),1:2,mean)
   omega_0 <- Reduce("+", omega_k) / K
+  sigma_0 <- solve(omega_0)
 
   #Initialize estimates for tau_k
   #Tau vector of subject specific regularization param on Omega_0
@@ -78,15 +73,16 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
     #print(k)
     #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
     f_opt <- function(tau) {
-      -1 * log_tau_posterior(tau, omega_k[[k]], omega_0, lambda_2 = 0)
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau, lambda_2, m_iter = 100)
     }
     #Optimize in 1D
-    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 1000), tol = 10)$min)
+    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
   }
 
   #Set up storage for results
   #Omegas
   omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
+  accept_k   <- vector(mode = "numeric", length = K)
   omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
   pct_omega_acc <- vector(mode = "integer", length = n_samples)
   pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
@@ -132,66 +128,66 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
     #          function(i) c(x[[i]], lapply(list(...), function(y) y[[i]])))
     # }
     
+    #Test list for non-parallel loop to debug graph_update
+    #omega_k_update <- list()
     #Update G_k, Omega_k via modified BIPS proposal & update scheme - Wang and Li (2012)
-    omega_k <- foreach::foreach(
-        k         = 1:K, #Subject index
-#        .combine  = "c", #List output
-#        .multicombine = TRUE,
-#        .init     = list(omega_k = list(), accept = list()),
-        .packages = c("bayesRCM", "BDgraph", "Matrix"), #Packages
-        .noexport   = c("graph_update","gwish_ij_update", "rgwish", "isSymmetric", "forceSymmetric") #Functions necessary to export
-      ) %dopar% {
-        #Initialize Acceptance  
-        #accept <- vector(mode = "numeric", length = K)
-        #print(paste0("Subject -- ", k))
-
-        #Propose/update G_k, Omega_k via
-        update <-
-          graph_update(
-            row_col  = row_col,
-            df       = tau_vec[k] + 2,
-            D        = sigma_0 * tau_vec[k],
-            v        = vk[k],
-            S        = Sk[[k]],
-            adj      = adj_k[[k]],
-            omega    = omega_k[[k]],
-            lambda_1 = lambda_1
-          )
-        
-        #Record acceptance rate
-        #accept[k] <- update$accept
-
-        #Upper triangular and averaged transpose for computational stability
-        tri_adj <- update$adj
-        tri_adj[lower.tri(tri_adj, diag = T)] <- 0
-  
-        #Update omega_k
-        omega_k_update <- BDgraph::rgwish(1, tri_adj, vk[k] + tau_vec[k] + 2, Sk[[k]] + sigma_0 * tau_vec[k])
-        omega_k_update <- (omega_k_update + t(omega_k_update)) / 2 # for computational stability
-
-        #Return updated omega_k
-        #omega_k_update
-        return(omega_k_update)
-      }
+    omega_Gk_update <- foreach::foreach(
+      k         = 1:K, #Subject index
+      #         .combine  = "c", #List output
+      #         .multicombine = TRUE,
+      #         .init     = list(omega_k = list(), accept = list()),
+      .packages = c("bayesRCM", "BDgraph", "Matrix"), #Packages
+      .noexport = c("graph_update","gwish_ij_update", "rgwish") #Functions necessary to export
+    ) %dopar% {
+      #for(k in 1:k) {
+      print(paste0("Subject -- ", k))
+      #Propose/update G_k, Omega_k via
+      update <-
+        graph_update(
+          row_col  = row_col,
+          df       = tau_vec[k] + 2,
+          D        = sigma_0 * tau_vec[k],
+          v        = vk[k],
+          S        = Sk[[k]],
+          adj      = adj_k[[k]],
+          omega    = omega_k[[k]],
+          lambda_1 = lambda_1
+        )
+      
+      #Record acceptance rate
+      accept_k[k] <- update$accept
+      
+      #Upper triangular and averaged transpose for computational stability
+      tri_adj <- update$adj
+      tri_adj[lower.tri(tri_adj, diag = T)] <- 0
+      
+      #Update omega_k
+      omega_k_update <- BDgraph::rgwish(1, tri_adj, vk[k] + tau_vec[k] + 2, Sk[[k]] + sigma_0 * tau_vec[k])
+      omega_k_update <- (omega_k_update + t(omega_k_update)) / 2 # for computational stability
+      #omega_k_update[[k]] <- BDgraph::rgwish(1, tri_adj, vk[k] + tau_vec[k] + 2, Sk[[k]] + sigma_0 * tau_vec[k])
+      #omega_k_update[[k]] <- (omega_k_update[[k]] + t(omega_k_update[[k]])) / 2 # for computational stability
+      
+      #Return updated omega_k
+      return(omega_k_update)
+    }
     
-    # #Pass result
-    # omega_k  <- result[[1]]
-    # accept_k <- 
-    #   matrix(
-    #     unlist(result[[2]]),
-    #     nrow  = length(result[[2]]), 
-    #     byrow = TRUE
-    #   ) |>
-    #   (\(x) {apply(x, 2, mean)})()
+    #Pass back to omega_k
+    omega_k  <- omega_Gk_update
+    #omega_k <- omega_k_update
+    
 
     #Tau_k update
     tau_k <-
       map(
-        .x = 1:K, #Iterate from index 1 to K
-        ~tau_update(tau_vec[.x], omega_k[[.x]], omega_0, lambda_2, step_tau[.x])
+        .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
+        ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x])
       ) #Return list object
+    # for (k in 1:K) {
+    #   print(paste0("sub: ", k))
+    #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
+    # }
     accept_mat <- rbind(accept_mat, tau_k %>% map_lgl("accept")) #Pull out acceptance
-    tau_vec      <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
+    tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
 
     #Adaptive tau window/stepsize ~ variance/sigma in log normal
      if (t %% n_updates == 0 & t <= n_burn) {
@@ -200,7 +196,7 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
         #For each subject, adjust tau_k proposal (lognormal) step size
          for (k in 1:K) {
            if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
-            step_tau[k] <- step_tau[k] + 0.05
+            step_tau[k] <- min(1, step_tau[k] + 0.05)
            } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
              step_tau[k] <- max(0.05, step_tau[k] - 0.05)
             }
@@ -220,10 +216,10 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
       t_burn <- t - n_burn
       omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
       omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
-      tau_res[, t_burn]      <- tau_k
+      tau_res[, t_burn]      <- tau_vec
       lambda_res[, t_burn]   <- c(lambda_1, lambda_2, lambda_3)
       pct_omega_acc[t_burn]  <- pct_accept
-      #pct_k_acc[t_burn, ]    <- accept_k
+      pct_k_acc[t_burn, ]    <- accept_k
     }
 
     #Track temporal progress (every 20% progress update)

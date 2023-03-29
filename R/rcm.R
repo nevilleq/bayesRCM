@@ -36,9 +36,9 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
   vk <- map_dbl(y, nrow)
   Sk <- map(.x = y, ~t(.x) %*% .x)
 
-  #Set lambda 1-3 penalty gamma a, b  hyperparams
-  alpha <- c(1, 2, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
-  beta  <- c(1, 0.25, 1)
+  #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
+  alpha <- c(1/2, 1/2, 1/2) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1/2, 1/2, 1/2)
   
   #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
   alpha_tau <- K

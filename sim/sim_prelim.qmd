@@ -86,7 +86,7 @@ result <- rcm(sim_res$data_list, n_samples = 2500, n_burn = 500, n_cores = 4, n_
 ```
 
 ```{r}
-result <- read_rds("./result.rds")
+result <- read_rds("../result.rds")
 ```
 
 # 3. Analyze results  
@@ -283,6 +283,25 @@ tibble(
 n_iter <- ncol(result$tau_k)
 set.seed(4)
 
+#Estimates vs. truth
+tibble(
+  med_est  = apply(result$tau_k, 1, median),
+  mean_est = apply(result$tau_k, 1, mean),
+  truth    = sim_res$true_params$tau_k
+) %>%
+  pivot_longer(
+    cols = -truth,
+    names_to = "type",
+    values_to = "value"
+  ) %>%
+  group_by(type) %>%
+  summarise(
+    mabs = mean(abs(value - truth)),
+    mse  = mean((value - truth)^2),
+    rmse = sqrt(mse)
+  ) %>%
+  gt()
+
 #Diagnostics
 #Tauk
 tauk.gg <-
@@ -409,7 +428,7 @@ omegak.gg <-
   ggplot(aes(x = iteration, y = value, colour = Subject)) +
   #geom_point(size = 0.8, alpha = 0.2) +
   geom_line(size = 0.6, alpha = 0.36) +
-  facet_wrap(~roi, scales = "free_y", nrow = 2) +
+  facet_wrap(~roi, scales = "free_y", nrow = 5) +
   scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
                      minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
   theme(legend.position = "bottom") +
@@ -607,7 +626,7 @@ omega0_difnet.gg <- ggraph(my_graph, layout = 'dendrogram', circular = TRUE) +
     low  = "blue",
     mid  = NA,
     high = "red",
-    breaks = c(round(min_diff, 2) + 0.02, 0, round(max_diff, 2) - 0.02),
+    breaks = c(round(min_diff, 2) + 0.03, 0, round(max_diff, 2) - 0.03),
     ) +
   xlim(-pad, pad) + #Controls size of network for plotting
   ylim(-pad, pad) + #Wider = smaller network, more room for names if long

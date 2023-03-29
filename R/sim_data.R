@@ -83,7 +83,7 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
       warning("woops! Something's wrong, not flipping the desired number of edges.")
     }
     
-    #2. (Tau_k) Randomly sim tau_inv from inv. gamma distribution => tau is Gamma(a, 1/scale)
+    #2. (Tau_k) Randomly sim from truncated, left tailed gamma 
     set.seed(k)
     Tau_k[k] <- trunc - rgamma(1, alpha_tau, lambda_2)
     while(Tau_k[k] < 0) {
@@ -116,7 +116,8 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
     list(
       omega_0 = Omega_0,
       omega_k = Omega_k,
-      tau_k   = Tau_k
+      tau_k   = Tau_k,
+      alpha   = alpha_tau
     )
   
   ##E. If write is TRUE then create directory and write out simulated data list as .RDS

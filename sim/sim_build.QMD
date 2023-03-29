@@ -174,8 +174,22 @@ hist(Tau_k, breaks = 10)
 ```
 
 ```{r sim_data}
-sim_res <- sim_data(subjects = 20, volumes = 200, rois = 10,
-                      prop_true_con = 1/5, n_flip = 1, write = FALSE)
+#Set parameters
+sub   <- 20
+vol   <- 250
+p     <- 10
+a_tau <- sub
+lam_2 <- sub / 50  
+prop  <- 1/5
+nf    <- 1
+
+#Simulate data
+sim_res <- sim_data(subjects = sub, volumes = vol, rois = p, alpha_tau = a_tau,
+                    lambda_2 = lam_2, prop_true_con = prop, n_flip = nf, write = FALSE, seed = 4)
+
+#Data list
+data_list   <- sim_res$data_list
+true_params <- sim_res$true_params
 ```
 
 # 2. Deconstruct main `rcm()` call from `bayesRCM` package functions for debugging    
@@ -478,22 +492,22 @@ tibble(
   gt() 
 ```
 
-### 2.2.2 $\tau_k$ with fixed $\Omega_0, \Omega_k/G_k$  
+### 2.2.2 $\tau_k$, $\alpha_tau$ with fixed $\Omega_0, \Omega_k/G_k$  
 
 ```{r tauk, eval = FALSE, echo = FALSE}
 #Set sampling params
 y <- sim_res$data_list
-subjects <- length(y)
+subjects  <- length(y)
 n_samples <- 500
 n_burn    <- 0
 n_updates <- 0
-alpha_tau <- subjects #Fixed shape parameter for inv_tauk
-lambda_2  <- subjects / 50 #Keep mean at 50
+alpha_tau <- 50 #starting value (truth is number of subjects)
+lambda_2  <- alpha_tau / 50 #Keep mean at 50 (truth is subjects/50)
 Sk        <- map(.x = y, ~t(.x) %*% .x)
 
   #Set lambda 1-3 penalty gamma a, b  hyperparams
-  alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (Bayesian sparse covariance/glasso)
-  beta  <- c(1, 1, 1)
+  alpha <- c(1/2, 1/2, 1/2) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1/2, 1/2, 1/2)
 
   #Sample sizes
   K  <- length(y)
@@ -527,17 +541,17 @@ Sk        <- map(.x = y, ~t(.x) %*% .x)
   
   #Initialize estimates for tau_k
   #Tau vector of subject specific regularization param on Omega_0
-  tau_vec <- vector(mode = "numeric", length = K)
+  tau_vec   <- vector(mode = "numeric", length = K)
   #Set tau's MH stepsize
-  step_tau  <- rep(0.1, K)
+  step_tau     <- rep(0.5, K)
+  step_alpha   <- 2
+  step_lambda2 <- 0.1
 
   # #Iterate over each subject, find optimal tau_k based on posterior
-  log_tau_posterior(100, omega_k[[1]], omega_0, alpha_tau = subjects, lambda_2)
-  
-  
+  #log_tau_posterior(100, omega_k[[1]], omega_0, alpha_tau = subjects, lambda_2)
   tibble(
-  tau_grid = seq(1, 2, length.out = 100),
-  tau_res  = map_dbl(.x = tau_grid, ~exp(log_tau_posterior(.x, omega_k[[1]], omega_0, alpha_tau  = subjects, lambda_2 = 0, m_iter = 1000)))
+  tau_grid = seq(1, 99, length.out = 99),
+  tau_res  = map_dbl(.x = tau_grid, ~log_tau_posterior(.x, omega_k[[1]], omega_0, alpha_tau  = subjects, lambda_2 = 2/5, m_iter = 1000))
   ) %>%
   ggplot(aes(x = tau_grid, y = tau_res)) +
   geom_point() +
@@ -551,25 +565,30 @@ Sk        <- map(.x = y, ~t(.x) %*% .x)
       -1 * log_tau_posterior(tau, omega_k[[k]], omega_0, alpha_tau = subjects, lambda_2 = 0)
     }
     #Optimize in 1D
-    tau_vec[k] <- c(optimize(f_opt, lower = 1, upper = 2, tol = 0.01)$min)
+    tau_vec[k] <- c(optimize(f_opt, lower = 1, upper = 100, tol = 0.01)$min)
   }
 ```
   
 ```{r}
-  #Set up storage for results
-  #Omegas
-  #omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
-  #omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
-  #pct_omega_acc <- vector(mode = "integer", length = n_samples)
-  #pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
-
-  #Taus
-  accept_mat    <- matrix(NA, nrow = 0, ncol = K)
-  step_tau_mat  <- step_tau #Adaptive window for MH tau
-  tau_res       <- array(NA, c(K, n_samples))
+  #Taus, Alpha, Lambda_2
+  accept_tau     <- matrix(NA, nrow = 0, ncol = K)
+  accept_alpha   <- matrix(NA, nrow = 0, ncol = 1)
+  accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
+  step_tau_mat   <- step_tau #Adaptive window for MH tau
+  step_alpha_mat <- step_alpha 
+  step_lam2_mat  <- step_lambda2
+  tau_res        <- array(NA, c(K, n_samples))
+  alpha_res      <- vector(mode = "numeric", length = n_samples)
 
   #Lambdas
   lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
+  
+  #Alpha hyper parameters
+  mu_tau    <- 30
+  sigma_tau <- 3
+  
+  #Truncation
+  trunc <- c(0, 100)
 
   #Set timer
   timer   <- 0
@@ -583,44 +602,40 @@ Sk        <- map(.x = y, ~t(.x) %*% .x)
     #print(paste0("Iteration: ", t))
 
     #Lambda 2 Inv gamma scale parameter, induces rate in posterior by inv gamma?
-    lambda_2 <- rgamma(1, alpha[2] + alpha_tau + 1, rate = beta[2] + sum(tau_vec))
+    #lambda_2 <- rgamma(1, alpha[2] + alpha_tau + 1, rate = beta[2] + sum(tau_vec))
+    lambda_next <- lambda2_update(lambda_2, alpha_tau, tau_vec,
+                                 mu_tau, sigma_tau, window = step_lambda2)
+    lambda_2       <- lambda_next$lambda_2
+    accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
     
     #Update G_k, Omega_k via modified BIPS proposal & update scheme - Wang and Li (2012)
-    omega_k <- Omega_k
-    omega_0 <- Omega_0
+    omega_k <- sim_res$true_params$omega_k
+    omega_0 <- sim_res$true_params$omega_0
 
     #Tau_k update
-    tau_k <-
+    tau_next <-
       map(
         .x = 1:K, #Iterate from index 1 to K
-        ~tau_update(tau_vec[.x], omega_k[[.x]], Sk[[k]], omega_0, alpha_tau, lambda_2, step_tau[.x])
+        ~tau_update(tau_vec[.x], omega_k[[.x]], omega_0, alpha_tau, lambda_2, step_tau[.x])
       ) #Return list object
-    accept_mat <- rbind(accept_mat, tau_k %>% map_lgl("accept")) #Pull out acceptance
-    tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
+    accept_tau <- rbind(accept_tau, tau_next %>% map_lgl("accept")) #Pull out acceptance
+    tau_vec    <- tau_next %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
     
-    #Adaptive tau window/stepsize ~ variance/sigma in log normal
-     # if (t %% n_updates == 0 & t <= n_burn) {
-     #    #Compute acceptance rate (colwise mean)
-     #    accept_rate <- apply(accept_mat, 2, mean)
-     #    #For each subject, adjust tau_k proposal (lognormal) step size
-     #     for (k in 1:K) {
-     #       if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
-     #        step_tau[k] <- step_tau[k] + 0.05
-     #       } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
-     #         step_tau[k] <- max(0.05, step_tau[k] - 0.05)
-     #        }
-     #     }
-     #     step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
-     #     accept_mat    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
-     # }
+    #Update alpha_tau
+    alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau = 50, sigma2_tau = 1, window = step_alpha,
+                          a_trunc = 25, b_trunc = 75, trunc = 100)
+    alpha_tau    <- alpha_next$alpha_tau
+    accept_alpha <- rbind(accept_alpha, alpha_next$accept)
+
 
     #Save those results after burn-in
     if(t > n_burn) {
       t_burn <- t - n_burn
       #omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
       #omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
-      tau_res[, t_burn]      <- tau_vec
-      lambda_res[, t_burn]   <- c(NA, lambda_2, NA)
+      tau_res[, t_burn]    <- tau_vec
+      alpha_res[t_burn]    <- alpha_tau
+      lambda_res[, t_burn] <- c(NA, lambda_2, NA)
       #pct_omega_acc[t_burn]  <- pct_accept
       #pct_k_acc[t_burn, ]    <- accept_k
     }
@@ -636,10 +651,13 @@ Sk        <- map(.x = y, ~t(.x) %*% .x)
   #Result list of results
   tau_k_result <-
     list(
-      tau_k     = tau_res,
-      lambda_2  = lambda_res[2, ], 
-      tau_acc   = accept_mat,
-      tau_step  = step_tau_mat
+      tau_k      = tau_res,
+      alpha_tau  = alpha_res,
+      lambda_2   = lambda_res[2, ], 
+      tau_acc    = accept_tau,
+      tau_step   = step_tau_mat,
+      alpha_acc  = accept_alpha,
+      alpha_step = step_alpha_mat
     )
   
   #Write out for safekeeping

@@ -1,4 +1,6 @@
-#' Function to update tau_k given an Exp(lambda_2) prior
+#' Function to update lambda_2 with Gamma prior
+#'
+#' @description Function to update 
 #'
 #' @param alpha_tau numeric > 0, current value of alpha_tau shape parameter in tau_k prior
 #' @param tau_k numeric > 0, current value of tau for Kth subject
@@ -6,10 +8,11 @@
 #' @param window numeric > 0, parameter to set step size for tau update proposals from log-normal
 #' @param trunc  numeric > 0, truncation for regularization parameter tau_k
 #'
-#' @return
+#' @return Returns list of MH-step updated (or not) lambda_2 scalar value and a logicial T/F whether the proposal was accepted
 #' @export
 #'
 #' @examples
+#' lambda2_update(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, window, trunc = c(0, 100))
 lambda2_update <- function( lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, window, trunc = c(0, 100)) {
   
    # alpha_tau = 50; tau_vec = runif(20, 0, 100); lambda_2 = 1; mu_tau = 30; sigma_tau = 3; trunc = c(0, 100);

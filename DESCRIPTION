@@ -20,7 +20,7 @@ Exports:
     "example.df"
 Suggests:
   tidyverse
-RoxygenNote: 7.2.1
+RoxygenNote: 7.2.3
 LinkingTo: 
     Rcpp,
     RcppArmadillo

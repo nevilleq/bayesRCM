@@ -10,9 +10,48 @@
     <loc>https://nevilleq.github.io/bayesRCM/index.html</loc>
   </url>
   <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/alpha_update.html</loc>
+  </url>
+  <url>
     <loc>https://nevilleq.github.io/bayesRCM/reference/bayesRCM-package.html</loc>
   </url>
   <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/bic_cal.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/g0_log_density.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/graph_update.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/gwish_ij_update.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/ind_graphs.html</loc>
+  </url>
+  <url>
     <loc>https://nevilleq.github.io/bayesRCM/reference/index.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/lambda2_update.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/mbic_cal.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/omega0_update.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/randCov.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/rcm.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/spcov_bcd.html</loc>
+  </url>
+  <url>
+    <loc>https://nevilleq.github.io/bayesRCM/reference/tau_update.html</loc>
   </url>
 </urlset>

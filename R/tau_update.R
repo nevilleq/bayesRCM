@@ -21,8 +21,9 @@ tau_update <- function(tau_k, omega_k, sigma_0, alpha_tau, lambda_2, window, tru
   } else {
     #Compute MH transition probability
     log_diff  <- log_tau_posterior(tau_prop, omega_k, sigma_0, alpha_tau, lambda_2) - log_tau_posterior(tau_k, omega_k, sigma_0, alpha_tau, lambda_2)
-    prop_diff <- dtrunc_norm(tau_k, mean = tau_prop, sd = window, a = trunc[1], b = trunc[2], log = TRUE) - 
-                  dtrunc_norm(tau_prop, mean = tau_k, sd = window, a = trunc[1], b = trunc[2], log = TRUE)
+    prop_diff <- log(truncdist::dtrunc(spec = "norm", x = tau_k, mean = tau_prop, sd = window, a = trunc[1], b = trunc[2])) - 
+                  log(truncdist::dtrunc(spec = "norm", x = tau_prop, mean = tau_k, sd = window, a = trunc[1], b = trunc[2]))
+    
     if(is.nan(prop_diff)) {
       prop_diff <- -Inf
     }
@@ -42,18 +43,25 @@ tau_update <- function(tau_k, omega_k, sigma_0, alpha_tau, lambda_2, window, tru
 }
 
 log_tau_posterior <- function(tau_k, omega_k, sigma_0, alpha_tau, lambda_2, trunc = c(0, 100), m_iter = 100) {
+  #If outside domain return zero
+  if(tau_k <= trunc[1] | tau_k >= trunc[2]) {
+    return(0)
+  }
+  
   #Parameters
-  #p   <- nrow(omega_k)
-  b   <- tau_k + 2
+  b   <- max(tau_k + 2, 3)
   D   <- sigma_0 * tau_k
-  nu  <- pmax(trunc[2] - tau_k, trunc[1] + 0.000000001)
+  nu  <- max(trunc[2] - tau_k, trunc[1] + 0.000000001)
   adj <- abs(omega_k) > 0.001 
   tri_adj <- adj
   tri_adj[lower.tri(tri_adj, diag = T)] <- 0
 
   #Log-Gwish (un-normalized)
   log_unnorm_pdf <- (b - 2) / 2 * log(matdet(omega_k)) - mattr(matprod(D, omega_k)) / 2 + #Gwish prior
-                      dtrunc_gamma(nu, shape = alpha_tau, rate = lambda_2, log = TRUE) #Tau prior
+                      log(truncdist::dtrunc(spec = "gamma", x = nu, a = trunc[1], b = trunc[2], #tau prior
+                                            shape = alpha_tau, rate = lambda_2))
+  
+  #G-wish normalizing const. approx
   log_gwish_norm <- BDgraph::gnorm(tri_adj, b = b, D = D, iter = m_iter)
   
   #If is -Inf then don't use in posterior (will be inf for both proposal & current)
@@ -78,7 +86,7 @@ log_tau_posterior <- function(tau_k, omega_k, sigma_0, alpha_tau, lambda_2, trun
   return(pdf)
 }
 
-dtrunc_gamma <- function(x, shape, rate, a = 0, b = Inf, log = FALSE) {
+dtrunc_gamma <- function(x, shape = 1, rate = 1, a = 0, b = Inf, log = FALSE) {
   #If x \not\in (a, b) return 0
   if(x < a | x > b) {
     return(0) #outside domain/support
@@ -96,7 +104,7 @@ dtrunc_gamma <- function(x, shape, rate, a = 0, b = Inf, log = FALSE) {
   }
 }
 
-dtrunc_norm <- function(x, mean, sd, a, b, log = FALSE) {
+dtrunc_norm <- function(x, mean = 0, sd = 1, a = -Inf, b = Inf, log = FALSE) {
   #If x \not\in (a, b) return 0
   if(x < a | x > b) {
     return(0) #outside domain/support

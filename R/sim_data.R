@@ -11,8 +11,8 @@
 #' @export 
 #'
 #' @examples
-sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/5, trunc = 100,
-                     alpha_tau = 20, lambda_2 = 2/5, n_flip = 1, seed = 4, write = FALSE) {
+sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/5, trunc = c(0, 100),
+                     alpha_tau = 50, lambda_2 = 2/5, n_flip = 1, seed = 4, write = FALSE) {
   
   #subjects = 20; volumes = 100; rois = 10; prop_true_con = 1/2; seed = 1; n_flip = 1;
   #A. G_0 --> Omega_0
@@ -85,12 +85,9 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
     
     #2. (Tau_k) Randomly sim from truncated, left tailed gamma 
     set.seed(k)
-    Tau_k[k] <- trunc - rgamma(1, alpha_tau, lambda_2)
-    while(Tau_k[k] < 0) {
-      Tau_k[k] <- trunc - rgamma(1, alpha_tau, lambda_2)
-    }
-    #(200 - rgamma(1000, 20, 1/5)) |> hist()
-    
+    Tau_k[k] <- trunc[2] - truncdist::rtrunc(spec = "gamma", a = trunc[1], b = trunc[2],
+                                             n = 1, shape = alpha_tau, rate = lambda_2)
+
     #3. (Omega_k) ~ GWish(G_k, Tau_k, Omega_0/Tau_k) => Omega_k^{-1} = Sigma_0 for mvtnorm
     tri_adj <- G_k[[k]]
     tri_adj[lower.tri(tri_adj, diag = TRUE)] <- FALSE #Only upper tri adj for rgwish
@@ -114,19 +111,32 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
   #D. True parameters
   true_params <-
     list(
-      omega_0 = Omega_0,
-      omega_k = Omega_k,
-      tau_k   = Tau_k,
-      alpha   = alpha_tau
+      omega_0   = Omega_0,
+      omega_k   = Omega_k,
+      tau_k     = Tau_k,
+      alpha_tau = alpha_tau,
+      lambda_2  = lambda_2
     )
   
-  ##E. If write is TRUE then create directory and write out simulated data list as .RDS
-  dir.create("./sim_data", showWarnings = FALSE)
-  dir.create("./sim_truth", showWarnings = FALSE)
-  write_rds(data_list, paste0("./sim_data/seed_", seed, ".rds"))
-  write_rds(true_params, paste0("./sim_truth/seed_", seed, ".rds"))
+  #E. Simulation Settings
+  sim_settings <-
+    tibble( 
+      subjects  = subjects,
+      volumes   = volumes,
+      rois      = rois,
+      prop_true_con = prop_true_con,
+      n_flip    = n_flip
+    )
   
-  #F. Return list of data and true params
-  return(list(data_list = data_list, true_params = true_params))
+  #F. If write is TRUE then create directory and write out simulated data list as .RDS
+  if(write) {
+    dir.create("./sim_data", showWarnings = FALSE)
+    dir.create("./sim_truth", showWarnings = FALSE)
+    write_rds(data_list, paste0("./sim_data/seed_", seed, ".rds"))
+    write_rds(true_params, paste0("./sim_truth/seed_", seed, ".rds"))
+  }
+  
+  #G. Return list of data and true params
+  return(list(data_list = data_list, true_params = true_params, sim_settings = sim_settings))
   
 }

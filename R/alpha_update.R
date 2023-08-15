@@ -12,12 +12,12 @@
 #' @examples
 alpha_update <- function(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window, trunc = c(0, 100)) {
   
-  alpha_tau = 50; tau_vec = runif(20, 0, 100); lambda_2 = 1; mu_tau = 30; sigma_tau = 3; trunc = c(0, 100);
-  window = 2;
+  # alpha_tau = 50; tau_vec = runif(20, 0, 100); lambda_2 = 1; mu_tau = 30; sigma_tau = 3; trunc = c(0, 100);
+  # window = 2;
 
   #Propose new alpha_tau (shape parameter in tau_k reg. gamma dist)
-  alpha_prop   <- truncnorm::rtruncnorm(1, mean = alpha_tau, sd = window, a = 0, b = Inf)
-  alpha_prop   <- alpha_tau + rnorm(1, sd = window)
+  alpha_prop   <- truncdist::rtrunc(spec = "norm", a = trunc[1], b = trunc[2], n = 1, mean = alpha_tau, sd = window)
+  #alpha_prop   <- alpha_tau + rnorm(1, sd = window)
   
   if (alpha_prop < 0) {
     accept <- FALSE
@@ -26,9 +26,12 @@ alpha_update <- function(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window
     log_diff  <- log_alpha_posterior(alpha_prop, tau_vec, lambda_2, mu_tau, sigma_tau, trunc) -
                   log_alpha_posterior(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, trunc)
 
-    prop_diff <- dtrunc_norm(alpha_tau, mean = alpha_prop, sd = window, a = 0, b = Inf, log = TRUE) - 
-                  dtrunc_norm(alpha_prop, mean = alpha_tau, sd = window, a = 0, b = Inf, log = TRUE)
-
+    # prop_diff <- dtrunc_norm(alpha_tau, mean = alpha_prop, sd = window, a = trunc[1], b = trunc[2], log = TRUE) - 
+    #               dtrunc_norm(alpha_prop, mean = alpha_tau, sd = window, a = trunc[1], b = trunc[2], log = TRUE)
+    prop_diff <- log(truncdist::dtrunc(spec = "norm", a = trunc[1], b = trunc[2],
+                                       x = alpha_tau, mean = alpha_prop, sd = window)) -
+                  log(truncdist::dtrunc(spec = "norm", a = trunc[1], b = trunc[2],
+                                        x = alpha_prop, mean = alpha_tau, sd = window))
     #MH Step
     if (log(runif(1)) < (log_diff + prop_diff)) {
       #Accept new proposal
@@ -44,22 +47,27 @@ alpha_update <- function(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window
 
 }
 
-log_alpha_posterior <- function(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, trunc = c(0, 100), type = "mean") {
+log_alpha_posterior <- function(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, trunc = c(0, 100), type = "mode") {
   #Parameters
   nu    <- pmax(trunc[2] - tau_vec, trunc[1] + 0.000000001)
   k     <- length(nu)
   sigma <- sigma_tau * lambda_2
   
   #Tau prior truncated gamma with
-  log_tau <- map_dbl(.x = nu, 
-                     ~dtrunc_gamma(.x, shape = alpha_tau, rate = lambda_2,
-                                   a = trunc[1], b = trunc[2], log = TRUE))
+  log_tau <- map_dbl(
+              .x = nu, 
+              ~truncdist::dtrunc(spec = "gamma", x = .x, a = trunc[1], b = trunc[2],
+                                 shape = alpha_tau, rate = lambda_2, log = FALSE) |>
+               log()
+            )
   
   #Alpha prior log pdf 
   if (type %in% "mean") {
-    log_alpha <- dtrunc_norm(alpha_tau, mu_tau, sigma, a = 0, b = Inf, log = TRUE)
+    log_alpha <- truncdist::dtrunc(spec = "norm", a = trunc[1], b = trunc[2],
+                                   x = alpha_tau, mean = mu_tau, sd = sigma) |> log()
   } else if (type %in% "mode") {
-    log_alpha <- dtrunc_norm(alpha_tau, mu_tau + 1, sigma, a = 0, b = Inf, log = TRUE)
+    log_alpha <- truncdist::dtrunc(spec = "norm", a = trunc[1], b = trunc[2],
+                                   x = alpha_tau, mean = mu_tau + 1, sd = sigma) |> log()
   } else {
     stop("type must be one of 'mean' or 'mode'")
   }
@@ -69,39 +77,4 @@ log_alpha_posterior <- function(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau,
   
   #Return log pdf
   return(log_pdf)
-}
-
-dtrunc_gamma <- function(x, shape, rate, a = 0, b = Inf, log = FALSE) {
-  #If x \not\in (a, b) return 0
-  if(x < a | x > b) {
-    return(0) #outside domain/support
-  }
-  
-  #PDF gamma scaled by CDF at truncation
-  pdf <- dgamma(x, shape, rate) / 
-    (pgamma(b, shape, rate) - pgamma(a, shape, rate))
-  
-  #If log return log(pdf) else return pdf
-  if (log) {
-    return(log(pdf))
-  } else {
-    return(pdf)
-  }
-}
-
-dtrunc_norm <- function(x, mean, sd, a, b, log = FALSE) {
-  #If x \not\in (a, b) return 0
-  if(x < a | x > b) {
-    return(0) #outside domain/support
-  }
-  
-  #PDF normal scaled by CDF at truncation
-  pdf <- dnorm(x, mean, sd) / (pnorm(b, mean, sd) - pnorm(a, mean, sd))
-  
-  #If log return log(pdf) else return pdf
-  if (log) {
-    return(log(pdf))
-  } else {
-    return(pdf)
-  }
 }

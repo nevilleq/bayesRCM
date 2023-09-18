@@ -7,5 +7,4 @@ src/*.so
 src/*.dll
 docs
 results
-sim*
 theory

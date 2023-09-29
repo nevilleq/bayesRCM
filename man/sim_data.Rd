@@ -13,7 +13,8 @@ sim_data(
   alpha_tau = 50,
   lambda_2 = 2/5,
   n_flip = 1,
-  seed = 4,
+  seed_0 = 4,
+  seed_k = 4,
   write = FALSE
 )
 }
@@ -26,7 +27,9 @@ sim_data(
 
 \item{prop_true_con}{Proportion of true connections}
 
-\item{seed}{Reproducible seed for the simulation}
+\item{seed_0}{Reproducible seed for the simulation of G_0/Omega_0}
+
+\item{seed_k}{Reproducible seed for the K simulations of subject-specific G_k/Omega_k}
 
 \item{save}{Logical, if TRUE write save}
 }

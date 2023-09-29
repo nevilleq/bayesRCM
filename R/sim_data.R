@@ -4,7 +4,8 @@
 #' @param volumes V number of samples/fMRI observations (length of time-series)
 #' @param rois P network dimension
 #' @param prop_true_con Proportion of true connections 
-#' @param seed Reproducible seed for the simulation
+#' @param seed_0 Reproducible seed for the simulation of G_0/Omega_0
+#' @param seed_k Reproducible seed for the K simulations of subject-specific G_k/Omega_k 
 #' @param save Logical, if TRUE write save
 #'
 #' @return data_list
@@ -12,9 +13,10 @@
 #'
 #' @examples
 sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/5, trunc = c(0, 100),
-                     alpha_tau = 50, lambda_2 = 2/5, n_flip = 1, seed = 4, write = FALSE) {
-  
-  #subjects = 20; volumes = 100; rois = 10; prop_true_con = 1/2; seed = 1; n_flip = 1;
+                     alpha_tau = 50, lambda_2 = 2/5, n_flip = 1, seed_0 = 4, seed_k = 4, write = FALSE) {
+
+  # subjects = 20; volumes = 200; rois = 10; prop_true_con = 1/5; trunc = c(0, 100);
+  # alpha_tau = 25; lambda_2  = alpha_tau / 50; n_flip = 1; seed_0 = 4; seed_k = 1; 
   #A. G_0 --> Omega_0
   ##1. Start with diagonal p x p matrix
   G_0 <- diag(1, rois)
@@ -23,7 +25,7 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
   #G_0[upper.tri(G_0)][seq(1, (subjects * (subjects - 1) / 2), by = 3)] <- TRUE 
   #G_0[upper.tri(G_0)] <- (rbinom(length(G_0[upper.tri(G_0)]), 1, prob = true_con / length(G_0[upper.tri(G_0)])) == 1)
   upper_G0 <- upper.tri(G_0, diag = FALSE)
-  set.seed(seed)
+  set.seed(seed_0)
   #G_0[upper_G0][seq(1, length(upper_G0), by = floor(1 / prop_true_con))] <- TRUE
   G_0[upper_G0] <- rbinom(sum(upper_G0), 1, prob = prop_true_con)
   
@@ -38,24 +40,29 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
   
   ##.4 Generate Omega_0 from G_0 (via Lin's simu_data.R schema)
   #Sample
-  set.seed(seed)
+  #set.seed(seed_0)
   sample <- runif(rois^2, 0.5, 1)
-  set.seed(seed)
+  #set.seed(seed_0)
   sample <- sample * sample(c(-1, 1), rois^2, replace = TRUE)
   
   #Threshold by G_0
   init     <- diag(0.5, rois) + G_0 * matrix(sample, nrow = rois, ncol = rois)
   init_sym <- init + t(init) + diag(rowSums(G_0 + t(G_0))/2) #Ensure symmetry & p.d. X + t(X) + diag()
   
-  #True Omega_0
-  Omega_0 <- diag(diag(init_sym)^-0.5) %*% init_sym %*% diag(diag(init_sym)^-0.5)
+  #True Omega_0 Precision/Partial Corr.
+  Omega_0 <- diag(diag(init_sym)^-0.5) %*% init_sym %*% diag(diag(init_sym)^-0.5) #This step is inducing non p.d.
   Sigma_0 <- solve(Omega_0)
+  Sigma_0 %>% round(., 2)
   
-  #Check positive definite
-  if (any(eigen(Omega_0, only.values = TRUE)$values <= 0) | any(eigen(Sigma_0, only.values = TRUE)$values <= 0)) { 
-    #Warning
-    warning("Warning: one of Omega_0/Sigma_0 not p.d.")
-  }
+  # #Check positive definite
+  # if (any(eigen(Omega_0, only.values = TRUE)$values <= 0)) { 
+  #   #Warning
+  #   warning("Warning: Omega_0 not p.d.")
+  #   Omega_0 <- as.matrix(Matrix::nearPD(Omega_0)$mat)
+  # }
+  # 
+  # #True Sigma_0 Covariance/Correlation
+  # Sigma_0 <- solve(Omega_0)
   
   ##B. G_k, Omega_k ~ GWish(G_k, tau_k, Omega_0/tau_k)
   #Set up storage and params
@@ -67,10 +74,17 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
   #alpha_tau <- subjects #Fixed shape parameter for inv_tauk
   #lambda_2  <- subjects / 50 #inv tau from inv gamma => scale 50/subjects tau, E[tau_1:k] = subjects * (1/lam2) = 50
   
+  #Random starting seed for G_k/Omega_k sim
+  set.seed(seed_k)
+  #This value unique just once
+  #set.seed works through for-loop, only need once 
+  
   #Loop through subjects
   for (k in 1:subjects) {
-    #Set seed, sample an off diagonal element / edge to flip
-    set.seed(k)
+    #Sample number of edges to flip
+    n_edges <- sample(c(2, 4, 6, 8), 1)
+    
+    #Sample an off diagonal element / edge to flip
     new_edges <- sample(1:(rois * (rois - 1) / 2), n_edges)
     
     #1. (G_k) Randomly add or remove n_edge # of edges in upper.tri(G_0) to generate
@@ -84,7 +98,7 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
     }
     
     #2. (Tau_k) Randomly sim from truncated, left tailed gamma 
-    set.seed(k)
+    #set.seed(new_seed)
     Tau_k[k] <- trunc[2] - truncdist::rtrunc(spec = "gamma", a = trunc[1], b = trunc[2],
                                              n = 1, shape = alpha_tau, rate = lambda_2)
 
@@ -93,8 +107,8 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
     tri_adj[lower.tri(tri_adj, diag = TRUE)] <- FALSE #Only upper tri adj for rgwish
     
     #Set seed & sample from RGwish
-    set.seed(k)
-    Omega_k[[k]] <- round(BDgraph::rgwish(1, adj = tri_adj, b = Tau_k[k] + 2, D = Sigma_0 * Tau_k[k]), 4)
+    #set.seed(new_seed)
+    Omega_k[[k]] <- BDgraph::rgwish(1, adj = tri_adj, b = Tau_k[k] + 2, D = Sigma_0 * Tau_k[k])
     Sigma_k[[k]] <- solve(Omega_k[[k]])
   }
   
@@ -104,7 +118,7 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
   
   #Loop through subjects and volumes to generate data
   for (k in 1:subjects) { #assumes no temporal mean trend, centered at 0
-    set.seed(k)
+    #set.seed(random_start + k)
     data_list[[k]] <- mvtnorm::rmvnorm(volumes, rep(0, rois), Sigma_k[[k]])
   }
   

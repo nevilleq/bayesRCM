@@ -5,3 +5,5 @@
 ^pkgdown$
 ^README\.Rmd$
 ^\.github$
+^sim$
+^results$

@@ -61,8 +61,11 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
 
   #Tune lambda for independent glasso
   for (lam in lambda_grid) {
+    # omega_k <- ind_graphs(y, lam)
+    # bic   <- c(bic, bic_cal(y, omega_k))
     omega_k <- ind_graphs(y, lam)
-    bic   <- c(bic, bic_cal(y, omega_k))
+    omega_k <- array(unlist(omega_k), dim = c(p, p, K))
+    bic     <- c(bic, bic_cal(y, omega_k))
   }
   
   #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0

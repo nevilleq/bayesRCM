@@ -12,9 +12,6 @@ LazyData: true
 Depends:
   R (>= 4.1)
 Imports:
-    tibble,
-    dplyr,
-    ggplot2,
     Rcpp
 Exports:
     "example.df"

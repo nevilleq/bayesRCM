@@ -15,6 +15,8 @@ source("./sim/sim_funcs.R")
 #create storage directories
 dir.create("./sim/sim_res/", showWarnings = FALSE)
 dir.create("./sim/sim_res/freq/", showWarnings = FALSE)
+dir.create("./sim/sim_res/freq/model_results/", showWarnings = FALSE)
+dir.create("./sim/sim_res/freq/sim_results/", showWarnings = FALSE)
 
 #file_path to read in data
 in_path <- "./sim/sim_data/"
@@ -46,6 +48,13 @@ sim_data.df <-
 sim_data.df %>%
   dplyr::select(setting, seed, true_params) %>%
   write_rds(., "./sim/sim_res/true_param_df.rds")
+
+#Take only 1 sim per setting for now
+sim_data.df <-
+  sim_data.df %>%
+  group_by(setting) %>%
+  slice(1) %>%
+  ungroup() #Temporary to test just one sim at each setting
 
 
 #######################################################################################
@@ -114,8 +123,9 @@ res_list_ig[[n]] <- list(omega_k = omega_k, adj_k = adj_k, omega_0 = omega_0)
 
 #Store ind_glasso results
 if(write){
-  readr::write_rds(res_list_ig[[n]], str_c("./sim/sim_res/freq/iglasso_", name,".rds"))
+  readr::write_rds(res_list_ig[[n]], str_c("./sim/sim_res/freq/model_results/iglasso_", name,".rds"))
 }
+
 #######################################
 ## 2.2 Fused group glasso 
 #Tuning
@@ -158,7 +168,7 @@ res_list_jgl[[n]] <- list(omega_k = omega_k, adj_k = adj_k, omega_0 = omega_0)
 
 #Store jgl results
 if(write){
-  readr::write_rds(res_list_jgl[[n]], str_c("./sim/sim_res/freq/jgl_", name,".rds"))
+  readr::write_rds(res_list_jgl[[n]], str_c("./sim/sim_res/freq/model_results/jgl_", name,".rds"))
 }
 #########################################
 ## 2.3 Frequentist RCM
@@ -166,8 +176,8 @@ if(write){
 lambda_grid <- 
   tidyr::expand_grid(
     lam1 = lam1_glasso,
-    lam2 =  10^seq(-3, 1, length.out = 10),
-    lam3 = 10^seq(-3, 1, length.out = 10)
+    lam2 = 10^seq(-1, 2, length.out = 10),
+    lam3 = 10^seq(-3, 0, length.out = 10)
   )
 bic <- vector(mode = "numeric", length = nrow(lambda_grid))
 
@@ -202,18 +212,21 @@ res_list_rcm[[n]] <- list(omega_k = omega_k, adj_k = adj_k, omega_0 = omega_0)
 
 #If write out
 if(write){
-  readr::write_rds(res_list_rcm[[n]], str_c("./sim/sim_res/freq/rcm_", name,".rds"))
+  readr::write_rds(res_list_rcm[[n]], str_c("./sim/sim_res/freq/model_results/rcm_", name,".rds"))
 }
 
 #Write out lambda tuning results
 lambda_res <- list(lam1_glasso, lam2_glasso, lam_rcm)
-readr::write_rds(lambda_res, str_c("./sim/sim_res/freq/lam_", name, ".rds"))
+readr::write_rds(lambda_res, str_c("./sim/sim_res/freq/model_results/lam_", name, ".rds"))
 } #End loop
+
+#Close parallel connection
+parallel::stopCluster(cl)
 
 #####################################################################################
 #2. Read in results and true params
 #file_path to read in results
-in_path <- "./sim/sim_res/freq/"
+in_path <- "./sim/sim_res/freq/model_results/"
 in_list <- list.files(in_path, pattern = "setting")
 
 #Read in results
@@ -227,7 +240,7 @@ sim_res.df <-
     in_files = str_c(in_path, in_list, sep = "/")
   ) %>%
   dplyr::select(model, setting, seed, in_files) %>%
-  left_join(., sim_settings.df, by = c("setting", "seed" == "seed_k")) %>%
+  left_join(., sim_settings.df, by = c("setting", "seed" = "seed_k")) %>%
   mutate(
     result = map(.x = in_files, ~read_rds(.x)),
   ) %>%
@@ -257,10 +270,19 @@ sim_res.df <-
 
 #####################################################################################
 #3. Model diagnostics  
+N <- nrow(sim_res.df)
 
-n <- 1
-
-
+#Loop through and grab model diagnostics (Diff Norms, MCC, Accuracy, etc.)
+for(n in 1:N) {
+  
+  #Unique name for directory to store figs
+  name <- 
+    with(
+      sim_res.df,
+      paste0(model[n], "_",
+             "setting", setting[n],
+             "_seed", seed[n])
+    )
 
 #True parameters
 true_params <- sim_res.df$true_params[[n]]
@@ -284,28 +306,136 @@ sim_diag.df <-
     k_diag = map(.x = adj_k, ~get_bin_diag_k(.x, Adj_k)),
     adj_0  = map(.x = omega_0, ~abs(.x) > threshold),
     O_diag = map(.x = adj_0, ~get_bin_diag_0(.x, Adj_0))
-  ) 
-  dplyr::select(-c(in_path:omega_0, all_of(contains(c("diff", "adj")))))
+  ) %>%
+  dplyr::select(model, setting, seed, subjects:n_flip, 
+                all_of(starts_with("norm")), all_of(ends_with("diag")))
 
-#Run sim (test)
-#sim_diag.df <- map_df(.x = 4:5, ~run_sim(seed = .x))
+  #Write out result per iteration
+  write_rds(sim_diag.df, str_c("./sim/sim_res/freq/sim_results/", name, ".rds"))
+
+} #End loop
+#############################################################################
+#Visualize final results
+#Read in frequentist
+in_path  <- "./sim/sim_res/freq/sim_results/"
+in_files <- list.files(in_path)
+
+#Read in each result
+sim_res_freq.df <-
+  tibble(
+    in_path = str_c(in_path, in_files),
+    result  = map(.x = in_path, ~read_rds(.x))
+  ) %>%
+  unnest(result) %>%
+  dplyr::select(-in_path)
+
+# #Read in bayesian results
+# in_path  <- "./sim/sim_res/bayes/sim_results/"
+# in_files <- list.files(in_path)
+# 
+# #Read in each result
+# sim_res_bayes.df <-
+#   tibble(
+#     in_path = str_c(in_path, in_files),
+#     result  = map(.x = in_path, ~read_rds(.x))
+#   ) %>%
+#   unnest(result) %>%
+#   mutate(model = "bayesRCM") %>%
+#   dplyr::select(model, everything(), -c(in_path))
+# 
+# #Final result data frame
+# sim_res.df <-
+#   bind_rows(
+#     sim_res_freq.df,
+#     sim_res_bayes.df
+#   ) %>%
+#   arrange(model, setting)
+
+#If no bayes results just use this
+sim_res.df <- sim_res_freq.df
+
+#Display sim settings
+sim_res.df %>%
+  dplyr::select(setting, subjects:lambda_2) %>%
+  distinct() %>%
+  gt() %>%
+  tab_header("Simulation Settings")
 
 #Omega_0 norm results
-sim_diag.df %>%
+sim_res.df %>%
   dplyr::select(model:seed, norm_0) %>%
-  unnest(norm_0)
+  unnest(norm_0) %>%
+  group_by(setting) %>%
+  gt() %>%
+  tab_header("Omega_0 Difference Norms by Setting")
 
 #Omega_0 diagnostics  
-sim_diag.df %>%
+sim_res.df %>%
   dplyr::select(model:seed, O_diag) %>%
-  unnest(O_diag)
+  unnest(O_diag) %>%
+  group_by(setting) %>%
+  gt() %>%
+  tab_header("Omega_0 Diagnostics by Setting")
 
 #Omega_k norm results  
-sim_diag.df %>%
+omega_k_norm.gt <-
+  sim_res.df %>%
   dplyr::select(model:seed, norm_k) %>%
-  unnest(norm_k)
+  unnest(norm_k) %>%
+  mutate(setting = str_c("Setting ", setting)) %>%
+  group_by(subject, setting) %>%
+  gt() %>%
+  tab_header("Omega_K Difference Norm by Setting & Subject")
+#omega_k_norm.gt
+
+omega_k_norm_sum.gt <-
+  sim_res.df %>%
+  dplyr::select(model:seed, norm_k) %>%
+  unnest(norm_k) %>%
+  mutate(setting = str_c("Setting ", setting)) %>%
+  dplyr::select(-seed) %>%
+  group_by(model, setting) %>%
+  summarise(
+    across(
+      .cols = where(is.numeric),
+      .fns  = list(mean = mean, sd = sd),
+      .names = "{.col}.{.fn}"
+    ),
+    .groups = "drop"
+  ) %>%
+  group_by(setting) %>%
+  gt() %>%
+  tab_header("Omega_K Diff-Norm Summarised over Subjects by Setting")
+
+omega_k_norm_sum.gt
 
 #Omega_k diagnostics
-sim_diag.df %>%
+omega_k_diag.gt <-
+  sim_res.df %>%
   dplyr::select(model:seed, k_diag) %>%
-  unnest(k_diag)
+  unnest(k_diag) %>%
+  mutate(setting = str_c("Setting ", setting)) %>%
+  group_by(subject, setting) %>%
+  gt() %>%
+  tab_header("Omega_K Diagnostics by Setting & Subject")
+
+omega_k_diag_sum.gt <-
+  sim_res.df %>%
+  dplyr::select(model:seed, k_diag) %>%
+  unnest(k_diag) %>%
+  mutate(setting = str_c("Setting ", setting)) %>%
+  dplyr::select(model, setting, mcc, accuracy, kappa) %>%
+  group_by(model, setting) %>%
+  summarise(
+    across(
+      .cols = where(is.numeric),
+      .fns  = list(mean = mean, sd = sd),
+      .names = "{.col}.{.fn}"
+    ),
+    .groups = "drop"
+  ) %>%
+  group_by(setting) %>%
+  gt() %>%
+  tab_header("Omega_K Diagnostics Summarised over Subjects by Setting")
+
+omega_k_diag_sum.gt

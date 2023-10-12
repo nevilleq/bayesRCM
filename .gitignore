@@ -8,3 +8,4 @@ src/*.dll
 docs
 results
 theory
+sim/sim_res

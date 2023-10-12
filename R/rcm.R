@@ -15,7 +15,10 @@
 rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_cores = 4, n_updates = 2) {
   # sim_res <- sim_data(subjects = 20, volumes = 200, rois = 10, alpha_tau = 25, lambda_2 = 0.5,
   #                     prop_true_con = 1/5, n_flip = 1, write = FALSE)
-  # y = sim_res$data_list; priors = NULL; n_samples = 100; n_burn = 0; n_cores = 4; n_updates = 2;
+   # y = sim_data.df$data_list[[1]]; priors = NULL; n_samples = 100; n_burn = 0; n_cores = 7; n_updates = 2;
+   # sim_data.df$true_params[[1]]$tau_k -> tau_truth;
+   # sim_data.df$true_params[[1]]$alpha_tau -> alpha_truth;
+   # sim_data.df$true_params[[1]]$lambda_2  -> lam2_truth;
   # library(Rcpp)
   # library(RcppArmadillo)
   # library(GIGrvg)
@@ -38,13 +41,18 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
 
   #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
   alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
-  beta  <- c(1/10, 1/10, 1/10)
+  beta  <- c(1/2, 1/2, 1/2)
   
   #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
-  alpha_tau <- K
-  lambda_2  <- alpha_tau / 50
-  mu_tau    <- 50 #Midpoint of truncation, prior mean/mode
-  sigma_tau <- 20 #Prior sd, can iteratively update based on tau est
+  mu_tau    <- 50 #Hyper-mean of tau_k = alpha_tau / lambda_2
+  sigma_tau <- 20 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
+  lambda_2  <- 1/2 #Fix rate lambda_2
+  alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
+  
+  #Check distributions
+  #rnorm(1000, mu_tau, sd = sigma_tau) %>% hist() #mean tau_k prior
+  #rnorm(1000, mu_tau, sd = sigma_tau * lambda_2) %>% hist() #alpha prior
+  #(100 - rgamma(1000, alpha_tau, rate = lambda_2)) %>% hist() #tau distribution
 
   #MCMC step size/window
   step_tau     <- rep(10, K)
@@ -71,40 +79,51 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
   #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0
   omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
   adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
-  omega_0 <- Reduce("+", omega_k) / K
+  #omega_0 <- Reduce("+", omega_k) / K #elementwise mean
+  omega_0 <- elementwise_median(omega_k) #elementwise median, more robust to outliers
   sigma_0 <- solve(omega_0)
 
   #Initialize estimates for tau_k
-  #Tau vector of subject specific regularization param on Omega_0
-  tau_vec <- vector(mode = "numeric", length = K)
+  tau_vec   <- vector(mode = "numeric", length = K)
 
   #Iterate over each subject, find optimal tau_k based on posterior in 1D
   for (k in 1:K) {
     #print(k)
     #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
     f_opt <- function(tau) {
-      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau, lambda_2, m_iter = 100)
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100)
     }
     #Optimize in 1D
     tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
   }
-
+  
   #Initialize alpha_tau from tau_vec
-  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
   f_opt <- function(alpha_tau) {
-    -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = K / 50, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+    -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
   }
   #Optimize in 1D
-  alpha_tau <- c(optimize(f_opt, lower = 1, upper = 100, tol = 0.01)$min)
+  alpha_tau <- c(optimize(f_opt, lower = 1, upper = 99, tol = 0.01)$min)
+  
+  # #Iterate over each subject, find optimal alpha_tau_k from tau_vec
+  # for (k in 1:K) {
+  #   #print(k)
+  #   #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
+  #   f_opt <- function(alpha_tau) {
+  #        -1 * log_alpha_posterior(alpha_tau, tau_vec[k], lambda_2 = K / 50, mu_tau = mu_tau[k], sigma_tau = sigma_tau[k], trunc = c(0, 100), type = "mode")
+  #   }
+  #   #Optimize in 1D
+  #   alpha_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+  # }
+  
   
   #Initialize lambda_2 from tau_vec
   #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
   f_opt <- function(lambda_2) {
-    -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, trunc = c(0, 100), type = "mode")
+    -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
   }
   #Optimize in 1D
   lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
-  
   
   #Set up storage for results
   #Omegas
@@ -117,12 +136,16 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
   #Taus, Alpha, Lambda_2
   accept_tau     <- matrix(NA, nrow = 0, ncol = K)
   accept_alpha   <- matrix(NA, nrow = 0, ncol = 1)
+ # accept_alpha   <- matrix(NA, nrow = 0, ncol = K)
   accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
   step_tau_mat   <- step_tau #Adaptive window for MH tau
-  step_alpha_mat <- step_alpha 
-  step_lam2_mat  <- step_lambda2
+  #step_alpha_mat <- step_alpha 
+  #step_lam2_mat  <- step_lambda2
   tau_res        <- array(NA, c(K, n_samples))
+  #mu_tau_res     <- array(NA, c(1, n_updates + 1))
+  #sigma_tau_res  <- array(NA, c(1, n_updates + 1))
   alpha_res      <- vector(mode = "numeric", length = n_samples)
+  #alpha_res      <- array(NA, c(K, n_samples))
   
   #Lambdas
   lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
@@ -131,7 +154,6 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
   timer   <- 0
   t_start <- proc.time()
   n_iter  <- (n_burn + n_samples)
-  #n_iter  <- 3
 
   #Loop through sampling algorithm n_samples + n_burn # times
   for (t in 1:n_iter) {
@@ -225,7 +247,7 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
     accept_tau <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
     tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
 
-    #Adaptive tau window/stepsize ~ variance/sigma in log normal
+    #Adaptive tau step-size/window for MH proposal
      if (t %% n_updates == 0 & t <= n_burn) {
         #Compute acceptance rate (colwise mean)
         accept_rate <- apply(accept_tau, 2, mean)
@@ -241,7 +263,37 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
          accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
      }
     
-    #Update alpha_tau
+    # #Update alpha_tau alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window,
+    # alpha_tau <-
+    #   map(
+    #     .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
+    #     ~alpha_update(alpha_vec[.x], tau_vec, lambda_2, mu_tau[.x], sigma_tau[.x], window = step_alpha)
+    #   ) #Return list object
+    # # for (k in 1:K) {
+    # #   print(paste0("sub: ", k))
+    # #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
+    # # }
+    # accept_alpha <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
+    # alpha_vec    <- alpha_tau %>% map_dbl("alpha_tau") #Pull out the numeric alpha_tau_k list object
+    
+    # #Adaptive hyper-prior params on Tau -> alpha_k ~ N(mu_tau_k, sigma_tau_k * lam_2)
+    # if (t %% n_updates == 0 & t <= n_burn) {
+    #   #Compute acceptance rate (colwise mean)
+    #   accept_rate <- apply(accept_tau, 2, mean)
+    #   #For each subject, adjust tau_k proposal (lognormal) step size
+    #   for (k in 1:K) {
+    #     if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
+    #       step_tau[k] <- min(20, step_tau[k] + 1)
+    #     } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
+    #       step_tau[k] <- max(1, step_tau[k] - 1)
+    #     }
+    #   }
+    #   step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
+    #   accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
+    # }
+    
+    
+    #Old alpha update
     alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
     alpha_tau    <- alpha_next$alpha_tau
     accept_alpha <- rbind(accept_alpha, alpha_next$accept)
@@ -285,10 +337,10 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
       tau_step    = step_tau_mat,
       alpha_tau   = alpha_res,
       alpha_acc   = accept_alpha,
-      alpha_step  = step_alpha_mat,
+      #alpha_step  = step_alpha_mat,
       lambdas     = lambda_res, 
       lambda_acc  = accept_lambda2,
-      lambda_step = step_lam2_mat,
+    #  lambda_step = step_lam2_mat,
       timer       = timer
     )
   

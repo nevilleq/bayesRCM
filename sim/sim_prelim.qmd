@@ -27,7 +27,7 @@ library(tidyverse)
 library(gt)
 library(igraph)
 library(ggraph)
-library(brainconn)
+#library(brainconn)
 library(tidygraph)
 #library(Matrix)
 
@@ -61,7 +61,7 @@ options(scipen = 999)
 
 # 1. Generate some data  
 
-```{r sim_data}
+```{r sim_data, eval = FALSE}
 #Set parameters
 sub   <- 20
 vol   <- 500
@@ -83,15 +83,16 @@ name  <- str_c("sub", sub, "_vol", vol, "_atau", a_tau, "_lam")
 
 # 2. Fit the model  
 
-```{r rcm_fit, eval = FALSE}
-result <- rcm(sim_res$data_list, n_samples = 2500, n_burn = 500, n_cores = 4, n_updates = 5)
-write_rds(result, "./sim_data/result_04_12_23.rds")
-```
-
 ```{r}
-result      <- read_rds("./sim_data/result_04_12_23.rds")
-true_params <- sim_res$true_params
-
+in_path     <- "./sim_res/bayes/model_results/"
+in_files    <- list.files(in_path)
+result      <- read_rds(str_c(in_path, in_files[1]))
+true_params <- read_rds("./sim_res/true_param_df.rds")
+true_params <- 
+  true_params %>%
+  filter(setting == 1, seed == 11) %>%
+  pull(true_params)
+true_params <- true_params[[1]]
 ```
 
 # 3. Analyze results  
@@ -220,8 +221,8 @@ result$lambdas %>%
   apply(., 1, mean)
 
 #post_mode  <- apply(result$omega_0, 1, stat_mode) # Need a user defined mode func if so
-Omega_0    <- sim_res$true_params$omega_0
-Sigma_0    <- sim_res$true_params$omega_0 %>% solve()
+Omega_0    <- true_params$omega_0
+Sigma_0    <- true_params$omega_0 %>% solve()
 omega_true <- Omega_0[upper.tri(Omega_0, diag = TRUE)]
 
 #Mean absolute error - raw difference
@@ -287,12 +288,13 @@ tibble(
 #result <- read_rds("../results/2023_02_13_debug_tauk.RDS")
 n_iter <- ncol(result$tau_k)
 set.seed(4)
+k <- nrow(result$tau_k)
 
 #Estimates vs. truth
 tibble(
   med_est  = apply(result$tau_k, 1, median),
   mean_est = apply(result$tau_k, 1, mean),
-  truth    = sim_res$true_params$tau_k
+  truth    = true_params$tau_k
 ) %>%
   pivot_longer(
     cols = -truth,
@@ -346,7 +348,7 @@ tauk.gg <-
   #geom_point(size = 0.8, alpha = 0.6) +
   geom_line(size = 0.6, alpha = 0.6) +
   geom_hline(aes(yintercept = true_value), colour = "red", linetype = 2) +
-  facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  facet_wrap(~tau, scales = "fixed", nrow = 5) +
   scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
                      minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
   theme(legend.position = "none") +
@@ -419,12 +421,12 @@ result$tau_step %>%
 #Alpha_tau
 alpha_tau.gg <-
   tibble(
-    alpha_tau = result$alpha_tau,
+    alpha_tau = result$alpha_vec,
     iteration = 1:n_iter
   ) %>%
   ggplot(aes(x = iteration, y = alpha_tau)) +
-  geom_point(size = 0.8, alpha = 0.6) +
-  geom_line(size = 0.6, alpha = 0.8) +
+ # geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8, colour = my_purple) +
  # facet_wrap(~tau, scales = "free_y", nrow = 5) +
   scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
                      minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
@@ -443,6 +445,50 @@ result$alpha_acc %>%
   apply(., 2, mean) %>%
   scales::percent()
 ```
+
+```{r alpha_diag_sub, eval = FALSE}
+alpha_tau.gg <-
+  t(result$alpha_vec) %>%
+  as.data.frame() %>%
+  mutate(
+    iteration = 1:nrow(.)
+  ) %>%
+  rename_with(
+    .cols = -iteration,
+    ~str_replace(.x, "V", "Sub. ")
+  ) %>%
+  pivot_longer(
+    cols = -iteration,
+    names_to = "alpha",
+    values_to = "value"
+  ) %>%
+  mutate(
+    alpha = as.factor(alpha) %>% fct_reorder(value, mean, .desc = TRUE)
+  ) %>%
+  ggplot(aes(x = iteration, y = value, colour = alpha)) +
+  #geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.6) +
+  geom_hline(aes(yintercept = true_params$alpha_tau), colour = "red", linetype = 2) +
+  facet_wrap(~alpha, scales = "fixed", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d(option = "mako") +
+  labs(
+    x = "Iteration",
+    y = "Value",
+    title = "Subject-specific Alpha_tau Posterior Samples"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+```
+
+```{r alpha_diag_display, eval = FALSE, echo = FALSE}
+mean(result$alpha_tau) - true_params$alpha_tau
+median(result$alpha_tau) - true_params$alpha_tau
+
+alpha_tau.gg
+```
+
 
 ```{r alpha_diag_display, eval = FALSE, echo = FALSE}
 mean(result$alpha_tau) - true_params$alpha_tau
@@ -464,8 +510,8 @@ lambda_2.gg <-
     iteration = 1:n_iter
   ) %>%
   ggplot(aes(x = iteration, y = lambda_2)) +
-  geom_point(size = 0.8, alpha = 0.6) +
-  geom_line(size = 0.6, alpha = 0.8) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8, colour = my_purple) +
  # facet_wrap(~tau, scales = "free_y", nrow = 5) +
   scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
                      minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
@@ -505,8 +551,8 @@ alpha_true  <- true_params$alpha_tau
 
 #Display distributions for 100 - tau_k
 tibble(
-  estimate = trunc[2] - rgamma(1000, shape = alpha_est, rate = lambda_est),
-  truth    = trunc[2] - rgamma(1000, shape = alpha_true, rate = lambda_true)
+  estimate = 100 - rgamma(1000, shape = alpha_est, rate = lambda_est),
+  truth    = 100 - rgamma(1000, shape = alpha_true, rate = lambda_true)
 ) %>%
   pivot_longer(
     cols = everything(),
@@ -576,7 +622,7 @@ omegak.gg <-
 
 ```{r gk_diag}
 #Set up null matrix of correct dimension to recover full precision for each Kth subject
-p  <- ncol(sim_res$data_list[[1]])
+p  <- ncol(true_params$omega_0)
 
 #Function to fill matrix w/upper triangle and make symettric
 fill_mat <- function(res_vec, p) {
@@ -601,7 +647,7 @@ omegak_acc.df <-
   mutate(
     mean_mat = map(.x = result, ~fill_mat(.x$post_mean, p)),
     med_mat  = map(.x = result, ~fill_mat(.x$post_median, p)),
-    truth    = sim_res$true_params$omega_k,
+    truth    = true_params$omega_k,
     mean_abs_dif = map2_dbl(.x = mean_mat, .y = truth, ~mean(abs(.x - .y))),
     med_abs_dif  = map2_dbl(.x = med_mat,  .y = truth, ~mean(abs(.x - .y))),
     mean_sq_dif  = map2_dbl(.x = mean_mat,  .y = truth, ~mean((.x - .y)^2)),
@@ -680,8 +726,8 @@ post_mean  <- apply(result$omega_0, 1, mean)   #L2
 post_med   <- apply(result$omega_0, 1, median) #L1
 
 #post_mode  <- apply(result$omega_0, 1, stat_mode) # Need a user defined mode func if so
-Omega_0    <- sim_res$true_params$omega_0
-Sigma_0    <- sim_res$true_params$omega_0 %>% solve()
+Omega_0    <- true_params$omega_0
+Sigma_0    <- true_params$omega_0 %>% solve()
 omega_true <- Omega_0[upper.tri(Omega_0, diag = TRUE)]
 
 ##Variance/Sigma
@@ -759,7 +805,7 @@ omega0_difnet.gg <- ggraph(my_graph, layout = 'dendrogram', circular = TRUE) +
     low  = "blue",
     mid  = NA,
     high = "red",
-    breaks = c(round(min_diff, 2) + 0.03, 0, round(max_diff, 2) - 0.03),
+    breaks = c(round(min_diff, 2), 0, round(max_diff, 2)),
     ) +
   xlim(-pad, pad) + #Controls size of network for plotting
   ylim(-pad, pad) + #Wider = smaller network, more room for names if long
@@ -780,7 +826,7 @@ omega0_difnet.gg <- ggraph(my_graph, layout = 'dendrogram', circular = TRUE) +
 omega0_difnet.gg
 ```
 
-```{r omegak_net_viz}
+```{r omegak_net_viz, eval = FALSE}
 #Get subject-specific difference
 omegak_net_viz.df <-
   omegak_acc.df %>%
@@ -877,7 +923,7 @@ omegak_difnet.gg
 
 # 5. Write out figures for display  
 
-```{r}
+```{r eval = FALSE}
 #Create directory for saving figures based on sim inputs
 out_path <- str_c("./figures/", name)
 dir.create(out_path)

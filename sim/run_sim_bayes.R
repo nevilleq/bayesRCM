@@ -53,6 +53,8 @@ sim_data.df %>%
   dplyr::select(setting, seed, true_params) %>%
   write_rds(., "./sim/sim_res/true_param_df.rds")
 
+#For testing
+sim_data.df$data_list[[1]] -> y
 
 #######################################################################################
 #1. Model Fits
@@ -61,11 +63,11 @@ sim_data.df %>%
 N <- nrow(sim_data.df)
 threshold <- 0.001
 #n_cores   <- parallel::detectCores() - 1
-n_cores   <- 20
+n_cores   <- 7
 
 #Storage lists
 #res_list_bayes <- vector(mode = "list", length = N)
-#n <- 1
+n <- 1
 write <- TRUE
 
 #Loop to fit bayesRCM::rcm
@@ -101,7 +103,7 @@ for(n in 1:N) {
   #Fit model (5000 post samps, 1000 burn)
  # n_samples = 100; n_burn = 10; n_cores = n_cores; n_updates = 5;
  # result <- bayesRCM::rcm(y, n_samples = 100, n_burn = 10, n_cores = n_cores, n_updates = 5)
-  result <- rcm(y, n_samples = 100, n_burn = 10, n_cores = n_cores, n_updates = 5)
+  result <- rcm(y, n_samples = 2000, n_burn = 500, n_cores = n_cores, n_updates = 5)
   write_rds(result, str_c("./sim/sim_res/bayes/model_results/", name, ".rds"))
   # result <- read_rds("./sim/sim_res/bayes/model_results/setting1_seed1.rds")
   n_iter <- ncol(result$omega_0)

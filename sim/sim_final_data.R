@@ -5,14 +5,42 @@ library(bayesRCM)
 #Fix Omega_0 for all iterations of each sim setting
 n_sim <- 10
 
+#Set alpha, lambda pairs
+alpha = c(20, 40)
+lambda = c(1/2, 3/4)
+
+#Plot what tau_k looks like
+tau_dist.gg <-
+  expand_grid(
+    alpha_tau = alpha 
+    lambda_2  = lambda
+  ) %>%
+  mutate(
+    setting      = 1:nrow(.),
+    setting      = str_c("alpha ", alpha_tau, ", lambda ", lambda_2) %>%
+                   as.factor() %>%
+                   fct_reorder(setting),
+    distribution = map2(.x = alpha_tau, .y = lambda_2,
+                        ~truncdist::rtrunc(spec = "gamma", a = 0, b = 100,
+                                           n = 1000, shape = .x, rate = .y)),
+  ) %>%
+  unnest(distribution) %>%
+  ggplot(aes(x = distribution)) +
+  geom_histogram(binwidth = 2) +
+  facet_wrap(~setting, scales = "free_y") +
+  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, by = 25))
+
+#Display
+tau_dist.gg
+
 #Grid of simulation settings (length 10 for now)
 sim_grid.df <-
   expand_grid(
     subjects  = c(20, 50),
     volumes   = c(250, 500),
     rois      = 10,
-    alpha_tau = c(20, 30), #Vary alpha (three different distributions of tau) <- this is key 
-    lambda_2  = c(0.5, 0.75), #Narrow + high values, moderate + most high some low, wider + more low
+    alpha_tau = alpha, #Vary alpha (three different distributions of tau) <- this is key 
+    lambda_2  = lambda, #Narrow + high values, moderate + most high some low, wider + more low
     prop_true_con = c(1/5),
     n_flip    = 1, #2, 4, 6, 8, --> let this vary by subject then no need to vary
     seed_0    = 4,

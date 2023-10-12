@@ -54,6 +54,7 @@ log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau
   nu    <- pmax(trunc[2] - tau_vec, trunc[1] + 0.000000001)
   k     <- length(nu)
   sigma <- sigma_tau * lambda_2
+  mu    <- mu_tau * lambda_2
   
   #Tau prior truncated gamma with
   log_tau <- map_dbl(
@@ -65,17 +66,18 @@ log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau
 
   #Alpha prior log pdf 
   if (type %in% "mean") {
-    log_alpha <- truncdist::dtrunc(spec = "norm", a = trunc[1], b = trunc[2],
-                                   x = alpha_tau, mean = mu_tau, sd = sigma) |> log()
+    log_alpha <- truncdist::dtrunc(spec = "norm", a = trunc[1], b = (trunc[2] * lambda_2),
+                                   x = alpha_tau, mean = mu, sd = sigma) |> log()
   } else if (type %in% "mode") {
-    log_alpha <- truncdist::dtrunc(spec = "norm", a = trunc[1], b = trunc[2],
-                                   x = alpha_tau, mean = mu_tau + 1, sd = sigma) |> log()
+    log_alpha <- truncdist::dtrunc(spec = "norm", a = trunc[1], b = (trunc[2] * lambda_2 + 1),
+                                   x = alpha_tau, mean = mu + 1, sd = sigma) |> log()
   } else {
     stop("type must be one of 'mean' or 'mode'")
   }
   
+  
   #Lambda prior log pdf
-  log_lambda <- dgamma(lambda_2, shape = 1, rate = 0.1, log = TRUE)
+  log_lambda <- dgamma(lambda_2, shape = 1, rate = 1, log = TRUE)
   
   #Sum/*k for log posterior pdf
   log_pdf <- sum(log_tau) + k * (log_alpha + log_lambda)

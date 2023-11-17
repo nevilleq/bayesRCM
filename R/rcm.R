@@ -12,7 +12,7 @@
 #' @examples
 #' rcm::example_data_list
 #' rcm(example_data_list)
-rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_cores = 4, n_updates = 2) {
+rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples = 100, n_burn = 10, n_cores = 4, n_updates = 2) {
   # sim_res <- sim_data(subjects = 20, volumes = 200, rois = 10, alpha_tau = 25, lambda_2 = 0.5,
   #                     prop_true_con = 1/5, n_flip = 1, write = FALSE)
    # y = sim_data.df$data_list[[1]]; priors = NULL; n_samples = 100; n_burn = 0; n_cores = 7; n_updates = 2;
@@ -38,14 +38,15 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
   p  <- ncol(y[[1]])
   vk <- map_dbl(y, nrow)
   Sk <- map(.x = y, ~t(.x) %*% .x)
+  trunc <- tau_trunc
 
   #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
   alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
-  beta  <- c(1/2, 1/2, 1/2)
+  beta  <- c(1/10, 1/10, 1/10)
   
   #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
   mu_tau    <- 50 #Hyper-mean of tau_k = alpha_tau / lambda_2
-  sigma_tau <- 20 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
+  sigma_tau <- 5 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
   lambda_2  <- 1/2 #Fix rate lambda_2
   alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
   
@@ -91,39 +92,95 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
     #print(k)
     #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
     f_opt <- function(tau) {
-      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100)
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100, trunc = trunc)
     }
     #Optimize in 1D
-    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+    tau_vec[k] <- c(optimize(f_opt, interval = c(1, 99), tol = 0.01)$min)
   }
   
-  #Initialize alpha_tau from tau_vec
-  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
-  f_opt <- function(alpha_tau) {
-    -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
-  }
-  #Optimize in 1D
-  alpha_tau <- c(optimize(f_opt, lower = 1, upper = 99, tol = 0.01)$min)
-  
-  # #Iterate over each subject, find optimal alpha_tau_k from tau_vec
-  # for (k in 1:K) {
-  #   #print(k)
-  #   #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
-  #   f_opt <- function(alpha_tau) {
-  #        -1 * log_alpha_posterior(alpha_tau, tau_vec[k], lambda_2 = K / 50, mu_tau = mu_tau[k], sigma_tau = sigma_tau[k], trunc = c(0, 100), type = "mode")
-  #   }
-  #   #Optimize in 1D
-  #   alpha_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+  # #Initialize alpha_tau from tau_vec
+  # #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
+  # f_opt <- function(alpha_tau) {
+  #   -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
   # }
+  # #Optimize in 1D
+  # alpha_tau <- c(optimize(f_opt, lower = 1, upper = 99, tol = 0.01)$min)
   
   
-  #Initialize lambda_2 from tau_vec
-  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
-  f_opt <- function(lambda_2) {
-    -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  # #Initialize lambda_2 from tau_vec
+  # #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
+  # f_opt <- function(lambda_2) {
+  #   -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  # }
+  # #Optimize in 1D
+  # lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
+  
+  #Grid search across alpha_tau and optimize lambda_2
+  mean_search <- 1:99
+  
+  #tau | alpha, \lambda ~ trunc gamma optimize w.r.t. lambda given tau_hat, alpha
+  alpha_lam_opt <- function(mean) {
+    f_opt <- function(lambda_2) {
+      sum(
+        map_dbl(
+          .x = tau_vec,
+          ~log(truncdist::dtrunc(spec = "gamma",
+                                 a = trunc[1],
+                                 b = trunc[2],
+                                 x = 100 - .x,
+                                 shape = mean * lambda_2,
+                                 rate  = lambda_2))
+        )
+      )
+    }
+    #asdf
+    return(as.data.frame(optimize(f_opt, lower = 0, upper = 10, tol = 0.01, maximum = TRUE)))
   }
-  #Optimize in 1D
-  lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
+  
+  #Result
+  alpha_res.df <-
+    tibble(
+      mean   = mean_search,
+      result = map(.x = mean, ~alpha_lam_opt(.x)) 
+    ) %>%
+    unnest(result) %>%
+    rename(lambda = maximum) #%>%
+    # mutate(
+    #   diff = c(NA, diff(objective, lag = 1)), #Stop when diff < 1 in objective function?
+    #   sample = map2(.x = mean,
+    #                 .y = lambda,
+    #                 ~(100 - truncdist::rtrunc(spec = "gamma",
+    #                                           a = trunc[1],
+    #                                           b = trunc[2],
+    #                                           n = 1000,
+    #                                           shape = .x * .y,
+    #                                           rate  = .y))),
+    #   mean_samp = map_dbl(.x = sample, ~mean(.x)),
+    #   sd_samp   = map_dbl(.x = sample, ~sd(.x)),
+    #   sample = map(.x = sample, ~tibble(sample = .x)),
+    #   hist = map(.x = sample, ~ggplot(.x, aes(x = sample)) + geom_histogram(binwidth = 5))
+    # ) 
+  
+  #Select alpha, lambda pair
+  opt.df <-
+    alpha_res.df %>%
+    filter(objective == max(objective))
+  
+  alpha_tau <-
+    opt.df %>%
+    mutate(
+      alpha = mean * lambda
+    ) %>%
+    pull(alpha)
+  
+  lambda_2 <-
+    opt.df %>%
+    pull(lambda)
+  
+  #E-bayes for alpha_tau
+  #alpha_tau <-
+  #  lambda_2 * mean(tau_vec) /
+  #  (1 - dgamma(100, alpha_tau, rate = lambda_2) / pgamma(100, alpha_tau, rate = lambda_2))
   
   #Set up storage for results
   #Omegas
@@ -140,7 +197,7 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
   accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
   step_tau_mat   <- step_tau #Adaptive window for MH tau
   #step_alpha_mat <- step_alpha 
-  #step_lam2_mat  <- step_lambda2
+  step_lam2_mat  <- step_lambda2
   tau_res        <- array(NA, c(K, n_samples))
   #mu_tau_res     <- array(NA, c(1, n_updates + 1))
   #sigma_tau_res  <- array(NA, c(1, n_updates + 1))
@@ -168,7 +225,8 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
     #Lambda 2 Gamma rate parameter for df/shrinkage tau_k prior
     #lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
     lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
-                                     mu_tau, sigma_tau, window = step_lambda2)
+                                     mu_tau, sigma_tau, window = step_lambda2,
+                                     trunc = trunc, ebayes = TRUE)
     lambda_2       <- lambda_next$lambda_2
     accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
 
@@ -198,7 +256,7 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
       .noexport = c("graph_update","gwish_ij_update", "rgwish") #Functions necessary to export
     ) %dopar% {
       #for(k in 1:k) {
-      print(paste0("Subject -- ", k))
+      #print(paste0("Subject -- ", k))
       #Propose/update G_k, Omega_k via
       update <-
         graph_update(
@@ -238,7 +296,7 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
     tau_k <-
       map(
         .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
-        ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x])
+        ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x], trunc = trunc)
       ) #Return list object
     # for (k in 1:K) {
     #   print(paste0("sub: ", k))
@@ -263,40 +321,24 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
          accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
      }
     
-    # #Update alpha_tau alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window,
-    # alpha_tau <-
-    #   map(
-    #     .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
-    #     ~alpha_update(alpha_vec[.x], tau_vec, lambda_2, mu_tau[.x], sigma_tau[.x], window = step_alpha)
-    #   ) #Return list object
-    # # for (k in 1:K) {
-    # #   print(paste0("sub: ", k))
-    # #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
-    # # }
-    # accept_alpha <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
-    # alpha_vec    <- alpha_tau %>% map_dbl("alpha_tau") #Pull out the numeric alpha_tau_k list object
-    
-    # #Adaptive hyper-prior params on Tau -> alpha_k ~ N(mu_tau_k, sigma_tau_k * lam_2)
-    # if (t %% n_updates == 0 & t <= n_burn) {
-    #   #Compute acceptance rate (colwise mean)
-    #   accept_rate <- apply(accept_tau, 2, mean)
-    #   #For each subject, adjust tau_k proposal (lognormal) step size
-    #   for (k in 1:K) {
-    #     if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
-    #       step_tau[k] <- min(20, step_tau[k] + 1)
-    #     } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
-    #       step_tau[k] <- max(1, step_tau[k] - 1)
-    #     }
-    #   }
-    #   step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
-    #   accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
-    # }
-    
+    #Adaptive lambda_2 step-size/window for MH proposal
+    if (t %% n_updates == 0 & t <= n_burn) {
+      #Compute acceptance rate (colwise mean)
+      accept_rate <- apply(accept_lambda2, 2, mean)
+
+      if (accept_rate > 0.75) { #If accepting to many, inc variance of proposal
+        step_lambda2  <- min(1, step_lambda2 + 0.01)
+      } else if (accept_rate < 0.5) { #If not accepting enough, dec variance of proposal
+        step_lambda2  <- max(0.01, step_lambda2 - 0.01)
+      }
+    }
+    step_lam2_mat  <- rbind(step_lam2_mat, step_lambda2) #Record adaptive step sizes
+    accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1) #Restart acceptance rate tracking
     
     #Old alpha update
-    alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
-    alpha_tau    <- alpha_next$alpha_tau
-    accept_alpha <- rbind(accept_alpha, alpha_next$accept)
+    #alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
+    #alpha_tau    <- alpha_next$alpha_tau
+    #accept_alpha <- rbind(accept_alpha, alpha_next$accept)
     
     
 
@@ -312,7 +354,8 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
       omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
       omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
       tau_res[, t_burn]      <- tau_vec
-      alpha_res[t_burn]      <- alpha_tau
+      #alpha_res[t_burn]      <- alpha_tau
+      alpha_res              <- alpha_tau
       lambda_res[, t_burn]   <- c(lambda_1, lambda_2, lambda_3)
       pct_omega_acc[t_burn]  <- pct_accept
       pct_k_acc[t_burn, ]    <- accept_k
@@ -336,11 +379,11 @@ rcm <- function(y = data_list, priors = NULL, n_samples = 100, n_burn = 10, n_co
       tau_acc     = accept_tau,
       tau_step    = step_tau_mat,
       alpha_tau   = alpha_res,
-      alpha_acc   = accept_alpha,
-      #alpha_step  = step_alpha_mat,
+      #alpha_acc   = accept_alpha,
+      #alpha_step  = step_alpha,
       lambdas     = lambda_res, 
       lambda_acc  = accept_lambda2,
-    #  lambda_step = step_lam2_mat,
+    #  lambda_step = step_lambda2,
       timer       = timer
     )
   

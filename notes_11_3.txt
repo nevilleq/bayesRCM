@@ -1,0 +1,25 @@
+11/3
+(1) Tau_k try more extreme case
+	- try volumes 10,000
+	- seed 5 alpha 25 lambda 0.5 
+	- compare with paired bar graph to truth
+		- Order by the true value highest to lowest and pair with estimate to compare trend
+		- repeat 10-100 times and average to see 
+	
+(2) Alpha/lambda
+	- Grid search alpha, given tau_k est, and opt w.r.t. lambda pick best pair
+		- then fix alpha and sample lambda
+	- Check end results distributions of tau_k vs. truth 
+
+11/8 Update  
+
+(1) Tau_k trend
+	- Diagnose the issue and get it to look like a similar trend
+
+(2) Alpha/lambda
+	- Grid search for mean, optimize w.r.t. lambda
+	- Take e-bayes estimator for alpha_tau based on the optimization above
+	- Fix alpha_tau and sample lambda_2
+	- Check tau_k & lambda_2 joint sample (once tau_k is sorted)
+
+

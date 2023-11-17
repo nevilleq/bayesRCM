@@ -63,7 +63,8 @@ sim_data.df$data_list[[1]] -> y
 N <- nrow(sim_data.df)
 threshold <- 0.001
 #n_cores   <- parallel::detectCores() - 1
-n_cores   <- 7
+#n_cores   <- 7
+n_cores   <- 24
 
 #Storage lists
 #res_list_bayes <- vector(mode = "list", length = N)
@@ -103,7 +104,7 @@ for(n in 1:N) {
   #Fit model (5000 post samps, 1000 burn)
  # n_samples = 100; n_burn = 10; n_cores = n_cores; n_updates = 5;
  # result <- bayesRCM::rcm(y, n_samples = 100, n_burn = 10, n_cores = n_cores, n_updates = 5)
-  result <- rcm(y, n_samples = 2000, n_burn = 500, n_cores = n_cores, n_updates = 5)
+  result <- rcm(y, n_samples = 4000, n_burn = 1000, n_cores = n_cores, n_updates = 8)
   write_rds(result, str_c("./sim/sim_res/bayes/model_results/", name, ".rds"))
   # result <- read_rds("./sim/sim_res/bayes/model_results/setting1_seed1.rds")
   n_iter <- ncol(result$omega_0)

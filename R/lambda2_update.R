@@ -13,10 +13,10 @@
 #'
 #' @examples
 #' lambda2_update(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, window, trunc = c(0, 100))
-lambda2_update <- function( lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, window, trunc = c(0, 100)) {
+lambda2_update <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, window, trunc = c(0, 100), ebayes = FALSE) {
   
    # alpha_tau = 50; tau_vec = runif(20, 0, 100); lambda_2 = 1; mu_tau = 30; sigma_tau = 3; trunc = c(0, 100);
-   # window = 1;
+   # window = 0.1;
 
   #Propose new lambda2 (rate parameter in tau_k reg. gamma dist)
   lambda_prop   <- truncdist::rtrunc(spec = "norm", a = 0, b = Inf, n = 1, mean = lambda_2, sd = window)
@@ -49,7 +49,7 @@ lambda2_update <- function( lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, win
 
 }
 
-log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, trunc = c(0, 100), type = "mode") {
+log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, trunc = c(0, 100), type = "mode", ebayes = FALSE) {
   #Parameters
   nu    <- pmax(trunc[2] - tau_vec, trunc[1] + 0.000000001)
   k     <- length(nu)
@@ -60,8 +60,7 @@ log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau
   log_tau <- map_dbl(
               .x = nu, 
               ~truncdist::dtrunc(spec = "gamma", x = .x, a = trunc[1], b = trunc[2],
-                                 shape = alpha_tau, rate = lambda_2, log = FALSE) |>
-              log()
+                                 shape = alpha_tau, rate = lambda_2, log = TRUE)
              )
 
   #Alpha prior log pdf 
@@ -77,10 +76,14 @@ log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau
   
   
   #Lambda prior log pdf
-  log_lambda <- dgamma(lambda_2, shape = 1, rate = 1, log = TRUE)
+  log_lambda <- dgamma(lambda_2, shape = 1, rate = 1/10, log = TRUE)
   
   #Sum/*k for log posterior pdf
-  log_pdf <- sum(log_tau) + k * (log_alpha + log_lambda)
+  if(ebayes) {
+    log_pdf <- sum(log_tau) + log_lambda
+  } else {
+    log_pdf <- sum(log_tau) + log_alpha + log_lambda #no K on 
+  }
   
   #Return log pdf
   return(log_pdf)

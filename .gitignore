@@ -9,3 +9,5 @@ docs
 results
 theory
 sim/sim_res
+sim/testing
+sim/truth

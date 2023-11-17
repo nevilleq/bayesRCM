@@ -12,7 +12,7 @@ lambda = c(1/2, 3/4)
 #Plot what tau_k looks like
 tau_dist.gg <-
   expand_grid(
-    alpha_tau = alpha 
+    alpha_tau = alpha,
     lambda_2  = lambda
   ) %>%
   mutate(

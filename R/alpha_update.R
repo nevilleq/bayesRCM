@@ -50,7 +50,7 @@ alpha_update <- function(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window
 log_alpha_posterior <- function(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, trunc = c(0, 100), type = "mode") {
   #Parameters
   nu    <- pmax(trunc[2] - tau_vec, trunc[1] + 0.000000001)
-  k     <- length(nu)
+ # k     <- length(nu)
   sigma <- sigma_tau * lambda_2
   mu    <- mu_tau * lambda_2
   
@@ -74,7 +74,7 @@ log_alpha_posterior <- function(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau,
   }
 
   #Sum for log pdf
-  log_pdf <- sum(log_tau) + k * log_alpha
+  log_pdf <- sum(log_tau) + log_alpha
   
   #Return log pdf
   return(log_pdf)

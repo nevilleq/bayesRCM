@@ -4,6 +4,9 @@ library(tidyverse)
 library(glasso)
 library(gt)
 
+# #Set working directory to bayesRCM
+# setwd("/panfs/jay/groups/1/zhangl4/nevil066/bayesRCM")
+
 #Prelims and functions
 source("./sim/sim_funcs.R")
 

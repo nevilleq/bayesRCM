@@ -34,11 +34,11 @@ tau_dist.gg <-
 tau_dist.gg
 
 #Grid of simulation settings (length 10 for now)
-sim_grid.df <-
-  expand_grid(
-    subjects  = c(20, 50),
-    volumes   = c(250, 500),
-    rois      = 10,
+sim_grid.df <-              
+  expand_grid(               #(1) Design pipeline to run sim & get summary tables/figures & (2) put up on overleaf
+    subjects  = c(20, 50),   #Keep at 20 for now run 50
+    volumes   = c(100, 500), #Try 100, 250, 500
+    rois      = 10, #Try up to 20
     alpha_tau = alpha, #Vary alpha (three different distributions of tau) <- this is key 
     lambda_2  = lambda, #Narrow + high values, moderate + most high some low, wider + more low
     prop_true_con = c(1/5),
@@ -53,9 +53,9 @@ sim_grid.df <-
   dplyr::select(setting, everything())
 
 #For now filter to 20 subjects only (for now)
-sim_grid.df <-
-  sim_grid.df %>%
-  filter(subjects == 20)
+# sim_grid.df <-
+#   sim_grid.df %>%
+#   filter(subjects == 20)
 
 #Dir.create
 dir.create("./sim/sim_data/", showWarnings = FALSE)

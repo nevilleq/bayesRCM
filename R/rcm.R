@@ -215,7 +215,7 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
   #Loop through sampling algorithm n_samples + n_burn # times
   for (t in 1:n_iter) {
     #Print iteration for early testing
-    print(paste0("Iteration: ", t))
+    #print(paste0("Iteration: ", t))
     
     #Update Lambdas via direct sampling
     #Lambda 1 sparsity-inducing penalty on G_k

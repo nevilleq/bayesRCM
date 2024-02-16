@@ -46,10 +46,10 @@ sim_data.df <-
     data_list   = map(sim_res, "data_list"),
     true_params = map(sim_res, "true_params")
   ) %>%
-  dplyr::select(-sim_res) %>%
-  group_by(setting) %>%
-  slice(1) %>%
-  ungroup() #Temporary to test just one sim at each setting
+  dplyr::select(-sim_res) #%>%
+  #group_by(setting) %>%
+  #slice(1) %>%
+  #ungroup() #Temporary to test just one sim at each setting
 
 #Write out true params to sim_res
 sim_data.df %>%

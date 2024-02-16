@@ -29,12 +29,12 @@ fill_mat <- function(res_vec, p) {
 
 #Get Binary Class Diagnostics for Adj_k
 get_bin_diag_k <- function(pred_list, truth_list) {
-  # 
-  # pred_list  <- a$adj_k[[1]]
-  # truth_list <- Adj_k
+   
+  #pred_list  <- sim_diag.df$adj_k[[1]]
+  #truth_list <- Adj_k
   #Grab list of upper triangle vectors
-  pred_up_tri   <- map(.x = pred_list, ~.x[upper.tri(.x, diag = FALSE)])
-  truth_up_tri  <- map(.x = truth_list, ~.x[upper.tri(.x, diag = FALSE)])
+  pred_up_tri   <- map(.x = pred_list, ~factor(.x[upper.tri(.x, diag = FALSE)], levels = c("FALSE", "TRUE")))
+  truth_up_tri  <- map(.x = truth_list, ~factor(.x[upper.tri(.x, diag = FALSE)], levels = c("FALSE", "TRUE")))
   
   #Make table and get confusion matrix results & diagnostics
   table         <- map2(.x = pred_up_tri, .y = truth_up_tri, 
@@ -59,8 +59,8 @@ get_bin_diag_k <- function(pred_list, truth_list) {
 get_bin_diag_0 <- function(omega, truth) {
   
   #Upper triangle vec
-  pred_up_tri   <- omega[upper.tri(omega, diag = FALSE)]
-  truth_up_tri  <- truth[upper.tri(truth, diag = FALSE)]
+  pred_up_tri   <- factor(omega[upper.tri(omega, diag = FALSE)], levels = c("FALSE", "TRUE"))
+  truth_up_tri  <- factor(truth[upper.tri(truth, diag = FALSE)], levels = c("FALSE", "TRUE"))
   
   #Make table and get confusion matrix results & diagnostics
   table <- table(pred_up_tri, truth_up_tri)

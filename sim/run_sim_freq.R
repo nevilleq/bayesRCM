@@ -50,11 +50,11 @@ sim_data.df %>%
   write_rds(., "./sim/sim_res/true_param_df.rds")
 
 #Take only 1 sim per setting for now
-sim_data.df <-
-  sim_data.df %>%
-  group_by(setting) %>%
-  slice(1) %>%
-  ungroup() #Temporary to test just one sim at each setting
+# sim_data.df <-
+#   sim_data.df %>%
+#   group_by(setting) %>%
+#   slice(1) %>%
+#   ungroup() #Temporary to test just one sim at each setting
 
 
 #######################################################################################
@@ -275,6 +275,9 @@ N <- nrow(sim_res.df)
 #Loop through and grab model diagnostics (Diff Norms, MCC, Accuracy, etc.)
 for(n in 1:N) {
   
+  #Display iteration
+  print(n)
+  
   #Unique name for directory to store figs
   name <- 
     with(
@@ -285,11 +288,12 @@ for(n in 1:N) {
     )
 
 #True parameters
+threshold <- 0.001
 true_params <- sim_res.df$true_params[[n]]
 Omega_0 <- true_params$omega_0
 Adj_0   <- abs(Omega_0) > threshold
 Omega_k <- true_params$omega_k
-Adj_k   <- map(.x = true_params$omega_k, ~abs(.x) > threshold)
+Adj_k   <- map(.x = Omega_k, ~abs(.x) > threshold)
 
 #Diagnostic .df
 sim_diag.df <-
@@ -317,17 +321,17 @@ sim_diag.df <-
 #############################################################################
 #Visualize final results
 #Read in frequentist
-in_path  <- "./sim/sim_res/freq/sim_results/"
-in_files <- list.files(in_path)
-
-#Read in each result
-sim_res_freq.df <-
-  tibble(
-    in_path = str_c(in_path, in_files),
-    result  = map(.x = in_path, ~read_rds(.x))
-  ) %>%
-  unnest(result) %>%
-  dplyr::select(-in_path)
+# in_path  <- "./sim/sim_res/freq/sim_results/"
+# in_files <- list.files(in_path)
+# 
+# #Read in each result
+# sim_res_freq.df <-
+#   tibble(
+#     in_path = str_c(in_path, in_files),
+#     result  = map(.x = in_path, ~read_rds(.x))
+#   ) %>%
+#   unnest(result) %>%
+#   dplyr::select(-in_path)
 
 # #Read in bayesian results
 # in_path  <- "./sim/sim_res/bayes/sim_results/"
@@ -351,91 +355,91 @@ sim_res_freq.df <-
 #   ) %>%
 #   arrange(model, setting)
 
-#If no bayes results just use this
-sim_res.df <- sim_res_freq.df
+# #If no bayes results just use this
+# sim_res.df <- sim_res_freq.df
+# 
+# #Display sim settings
+# sim_res.df %>%
+#   dplyr::select(setting, subjects:lambda_2) %>%
+#   distinct() %>%
+#   gt() %>%
+#   tab_header("Simulation Settings")
 
-#Display sim settings
-sim_res.df %>%
-  dplyr::select(setting, subjects:lambda_2) %>%
-  distinct() %>%
-  gt() %>%
-  tab_header("Simulation Settings")
+# #Omega_0 norm results
+# sim_res.df %>%
+#   dplyr::select(model:seed, norm_0) %>%
+#   unnest(norm_0) %>%
+#   group_by(setting) %>%
+#   gt() %>%
+#   tab_header("Omega_0 Difference Norms by Setting")
+# 
+# #Omega_0 diagnostics  
+# sim_res.df %>%
+#   dplyr::select(model:seed, O_diag) %>%
+#   unnest(O_diag) %>%
+#   group_by(setting) %>%
+#   gt() %>%
+#   tab_header("Omega_0 Diagnostics by Setting")
 
-#Omega_0 norm results
-sim_res.df %>%
-  dplyr::select(model:seed, norm_0) %>%
-  unnest(norm_0) %>%
-  group_by(setting) %>%
-  gt() %>%
-  tab_header("Omega_0 Difference Norms by Setting")
+# #Omega_k norm results  
+# omega_k_norm.gt <-
+#   sim_res.df %>%
+#   dplyr::select(model:seed, norm_k) %>%
+#   unnest(norm_k) %>%
+#   mutate(setting = str_c("Setting ", setting)) %>%
+#   group_by(subject, setting) %>%
+#   gt() %>%
+#   tab_header("Omega_K Difference Norm by Setting & Subject")
+# omega_k_norm.gt
 
-#Omega_0 diagnostics  
-sim_res.df %>%
-  dplyr::select(model:seed, O_diag) %>%
-  unnest(O_diag) %>%
-  group_by(setting) %>%
-  gt() %>%
-  tab_header("Omega_0 Diagnostics by Setting")
+# omega_k_norm_sum.gt <-
+#   sim_res.df %>%
+#   dplyr::select(model:seed, norm_k) %>%
+#   unnest(norm_k) %>%
+#   mutate(setting = str_c("Setting ", setting)) %>%
+#   dplyr::select(-seed) %>%
+#   group_by(model, setting) %>%
+#   summarise(
+#     across(
+#       .cols = where(is.numeric),
+#       .fns  = list(mean = mean, sd = sd),
+#       .names = "{.col}.{.fn}"
+#     ),
+#     .groups = "drop"
+#   ) %>%
+#   group_by(setting) %>%
+#   gt() %>%
+#   tab_header("Omega_K Diff-Norm Summarised over Subjects by Setting")
+# 
+# omega_k_norm_sum.gt
 
-#Omega_k norm results  
-omega_k_norm.gt <-
-  sim_res.df %>%
-  dplyr::select(model:seed, norm_k) %>%
-  unnest(norm_k) %>%
-  mutate(setting = str_c("Setting ", setting)) %>%
-  group_by(subject, setting) %>%
-  gt() %>%
-  tab_header("Omega_K Difference Norm by Setting & Subject")
-#omega_k_norm.gt
+# #Omega_k diagnostics
+# omega_k_diag.gt <-
+#   sim_res.df %>%
+#   dplyr::select(model:seed, k_diag) %>%
+#   unnest(k_diag) %>%
+#   mutate(setting = str_c("Setting ", setting)) %>%
+#   group_by(subject, setting) %>%
+#   gt() %>%
+#   tab_header("Omega_K Diagnostics by Setting & Subject")
 
-omega_k_norm_sum.gt <-
-  sim_res.df %>%
-  dplyr::select(model:seed, norm_k) %>%
-  unnest(norm_k) %>%
-  mutate(setting = str_c("Setting ", setting)) %>%
-  dplyr::select(-seed) %>%
-  group_by(model, setting) %>%
-  summarise(
-    across(
-      .cols = where(is.numeric),
-      .fns  = list(mean = mean, sd = sd),
-      .names = "{.col}.{.fn}"
-    ),
-    .groups = "drop"
-  ) %>%
-  group_by(setting) %>%
-  gt() %>%
-  tab_header("Omega_K Diff-Norm Summarised over Subjects by Setting")
-
-omega_k_norm_sum.gt
-
-#Omega_k diagnostics
-omega_k_diag.gt <-
-  sim_res.df %>%
-  dplyr::select(model:seed, k_diag) %>%
-  unnest(k_diag) %>%
-  mutate(setting = str_c("Setting ", setting)) %>%
-  group_by(subject, setting) %>%
-  gt() %>%
-  tab_header("Omega_K Diagnostics by Setting & Subject")
-
-omega_k_diag_sum.gt <-
-  sim_res.df %>%
-  dplyr::select(model:seed, k_diag) %>%
-  unnest(k_diag) %>%
-  mutate(setting = str_c("Setting ", setting)) %>%
-  dplyr::select(model, setting, mcc, accuracy, kappa) %>%
-  group_by(model, setting) %>%
-  summarise(
-    across(
-      .cols = where(is.numeric),
-      .fns  = list(mean = mean, sd = sd),
-      .names = "{.col}.{.fn}"
-    ),
-    .groups = "drop"
-  ) %>%
-  group_by(setting) %>%
-  gt() %>%
-  tab_header("Omega_K Diagnostics Summarised over Subjects by Setting")
-
-omega_k_diag_sum.gt
+# omega_k_diag_sum.gt <-
+#   sim_res.df %>%
+#   dplyr::select(model:seed, k_diag) %>%
+#   unnest(k_diag) %>%
+#   mutate(setting = str_c("Setting ", setting)) %>%
+#   dplyr::select(model, setting, mcc, accuracy, kappa) %>%
+#   group_by(model, setting) %>%
+#   summarise(
+#     across(
+#       .cols = where(is.numeric),
+#       .fns  = list(mean = mean, sd = sd),
+#       .names = "{.col}.{.fn}"
+#     ),
+#     .groups = "drop"
+#   ) %>%
+#   group_by(setting) %>%
+#   gt() %>%
+#   tab_header("Omega_K Diagnostics Summarised over Subjects by Setting")
+# 
+# omega_k_diag_sum.gt

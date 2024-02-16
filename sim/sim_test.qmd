@@ -56,10 +56,10 @@ options(scipen = 999)
 ```{r}
 #Alpha lambda
 alpha <- 20
-lambda <- 0.4
+lambda <- 0.5
 
 #Histogram
-(100 - truncdist::rtrunc(spec = "gamma", a = 0, b = 100,
+(100 - truncdist::rtrunc(spec = "gamma", a = 3, b = 100,
                   n = 1000, shape = alpha, rate = lambda)) |> hist()
 
 #Sim data

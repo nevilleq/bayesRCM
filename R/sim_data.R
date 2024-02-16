@@ -15,8 +15,11 @@
 sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/5, trunc = c(0, 100),
                      alpha_tau = 50, lambda_2 = 2/5, n_flip = 1, seed_0 = 4, seed_k = 4, write = FALSE) {
 
-  # subjects = 20; volumes = 200; rois = 10; prop_true_con = 1/5; trunc = c(0, 100);
-  # alpha_tau = 25; lambda_2  = alpha_tau / 50; n_flip = 1; seed_0 = 4; seed_k = 1; 
+  # subjects = 50; volumes = 1000; rois = 10; prop_true_con = 0.1; trunc = c(3, 100);
+  # alpha_tau = 20; lambda_2  = 0.5; n_flip = 1; seed_0 = 4; seed_k = 5; write = FALSE;
+  # sim_data(subjects = 50, volumes = 1000, rois = 10, alpha_tau = alpha,
+  #          lambda_2 = lambda, prop_true_con = 0.1, write = FALSE,
+  #          seed_0   = 4, seed_k = 5, trunc = c(3, 100))
   #A. G_0 --> Omega_0
   ##1. Start with diagonal p x p matrix
   G_0 <- diag(1, rois)
@@ -52,7 +55,7 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
   #True Omega_0 Precision/Partial Corr.
   Omega_0 <- diag(diag(init_sym)^-0.5) %*% init_sym %*% diag(diag(init_sym)^-0.5) #This step is inducing non p.d.
   Sigma_0 <- solve(Omega_0)
-  Sigma_0 %>% round(., 2)
+  #Sigma_0 %>% round(., 2)
   
   # #Check positive definite
   # if (any(eigen(Omega_0, only.values = TRUE)$values <= 0)) { 
@@ -101,6 +104,7 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
     #set.seed(new_seed)
     Tau_k[k] <- trunc[2] - truncdist::rtrunc(spec = "gamma", a = trunc[1], b = trunc[2],
                                              n = 1, shape = alpha_tau, rate = lambda_2)
+    #Tau_k[k] <- max(Tau_k[k], 3) #BDgraph needs b>2, but in actuality complains for anything < 3
 
     #3. (Omega_k) ~ GWish(G_k, Tau_k, Omega_0/Tau_k) => Omega_k^{-1} = Sigma_0 for mvtnorm
     tri_adj <- G_k[[k]]
@@ -108,7 +112,7 @@ sim_data <- function(subjects = 20, volumes = 200, rois = 10, prop_true_con = 1/
     
     #Set seed & sample from RGwish
     #set.seed(new_seed)
-    Omega_k[[k]] <- BDgraph::rgwish(1, adj = tri_adj, b = Tau_k[k] + 2, D = Sigma_0 * Tau_k[k])
+    Omega_k[[k]] <- BDgraph::rgwish(1, adj = tri_adj, b = Tau_k[k], D = Sigma_0 * Tau_k[k])
     Sigma_k[[k]] <- solve(Omega_k[[k]])
   }
   

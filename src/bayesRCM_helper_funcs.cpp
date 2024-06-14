@@ -94,33 +94,33 @@ double log_H(double nu, arma::mat V, arma::mat Omega, int i, int j){
   Omega0 = Omega;
   Omega0(i-1,j-1) = 0;  Omega0(j-1,i-1) = 0;
   Ome12 = Omega0.row(j-1); 
-  Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
+  //Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
   Ome12.shed_cols(j-1,j-1);
-  Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
+  //Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
   Ome22 = Omega0;
   Ome22.shed_rows(j-1,j-1); Ome22.shed_cols(j-1,j-1);
-  Rcpp::Rcout << "Ome22: " << Ome22 << std::endl;
+  //Rcpp::Rcout << "Ome22: " << Ome22 << std::endl;
   c = Ome12*solve(Ome22,Ome12.t()); // check
   if(c(0,0) == 0) {
     c(0,0) = 0.0000001;
   }
-  Rcpp::Rcout << "c: " << c << std::endl;
+  //Rcpp::Rcout << "c: " << c << std::endl;
   Omega0_ij << Omega(i-1,i-1) << 0 << arma::endr << 0 << c(0,0) << arma::endr;
-  Rcpp::Rcout << "Omega0_ij: " << Omega0_ij << std::endl;
+  //Rcpp::Rcout << "Omega0_ij: " << Omega0_ij << std::endl;
   
   // (i,j) = 1, note j>i
   arma::mat Omega1_ij, Ome11, A, test;
   Ome12 = Omega;
   Ome12.swap_rows(i,j-1);  Ome12 = Ome12.rows(i-1,i);
-  Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
+  //Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
   Ome12.shed_cols(j-1,j-1); Ome12.shed_cols(i-1,i-1);
-  Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
+  //Rcpp::Rcout << "Ome12: " << Ome12 << std::endl;
   
   Ome22 = Omega;
   Ome22.shed_rows(j-1,j-1); Ome22.shed_rows(i-1,i-1);
-  Rcpp::Rcout << "Ome22: " << Ome22 << std::endl;
+  //Rcpp::Rcout << "Ome22: " << Ome22 << std::endl;
   Ome22.shed_cols(j-1,j-1); Ome22.shed_cols(i-1,i-1);
-  Rcpp::Rcout << "Ome22: " << Ome22 << std::endl;
+  //Rcpp::Rcout << "Ome22: " << Ome22 << std::endl;
   Omega1_ij = Ome12*solve(Ome22,Ome12.t()); //check
   if(Omega1_ij(1,1) == 0) {
     Omega1_ij(1,1) = 0.0000001;
@@ -130,17 +130,17 @@ double log_H(double nu, arma::mat V, arma::mat Omega, int i, int j){
   } 
   
   Ome11 << Omega(i-1,i-1) << Omega(i-1,j-1)  << arma::endr << Omega(i-1,j-1)  << Omega(j-1,j-1)  << arma::endr;
-  Rcpp::Rcout << "Ome11: " << Ome11 << std::endl;
+  //Rcpp::Rcout << "Ome11: " << Ome11 << std::endl;
   A = Ome11-Omega1_ij;
-  Rcpp::Rcout << "A: " << A << std::endl;
+  //Rcpp::Rcout << "A: " << A << std::endl;
   //test << 0 << 0 << arma::endr << 0 << 1 << arma::endr;
   
   //Need to fix log(det(Omega))
   double a11, f, det_0, det_1; arma::mat V_ij, V_jj;
   a11 = A(0,0); V_jj = V(j-1,j-1);
   V_ij << V(i-1,i-1) << V(i-1,j-1)  << arma::endr << V(i-1,j-1)  << V(j-1,j-1)  << arma::endr;
-  Rcpp::Rcout << "V_ij: " << V_ij << std::endl;
-  Rcpp::Rcout << "V_jj: " << V_jj << std::endl;
+  // Rcpp::Rcout << "V_ij: " << V_ij << std::endl;
+  // Rcpp::Rcout << "V_jj: " << V_jj << std::endl;
   det_0 = matdet(Omega0_ij);
   det_1 = matdet(Omega1_ij);
   //Handle case when det may be < 0 due to imputing small number in Omega0_ij, Omega1_ij;
@@ -151,18 +151,18 @@ double log_H(double nu, arma::mat V, arma::mat Omega, int i, int j){
     det_1 = 0.001;
   }
   //check determinants
-  Rcpp::Rcout << "Omega0_ij: " << Omega0_ij << std::endl;
-  Rcpp::Rcout << "det_0 " << det_0 << std::endl;
-  Rcpp::Rcout << "Omega1_ij: " << Omega1_ij << std::endl;
-  Rcpp::Rcout << "det_1 " << det_1 << std::endl;
+  // Rcpp::Rcout << "Omega0_ij: " << Omega0_ij << std::endl;
+  // Rcpp::Rcout << "det_0 " << det_0 << std::endl;
+  // Rcpp::Rcout << "Omega1_ij: " << Omega1_ij << std::endl;
+  // Rcpp::Rcout << "det_1 " << det_1 << std::endl;
   f = -log_iwishart_InvA_const(nu,V_jj) - log_J(nu,V_ij,a11) + (nu-2)/2*(log(det_0) - log(det_1)) - trace(V_ij*(Omega0_ij-Omega1_ij))/2;
   
-  //print test
-  Rcpp::Rcout << "a11:"  << a11 << std::endl;
-  Rcpp::Rcout << "f:"  << f << std::endl;
-  Rcpp::Rcout << "Constant" << log_iwishart_InvA_const(nu,V_jj) << std::endl;
-  Rcpp::Rcout << "Log_J" << log_J(nu,V_ij,a11) << std::endl;
-  Rcpp::Rcout << "Trace" << trace(V_ij*(Omega0_ij-Omega1_ij))/2 << std::endl;
+  // //print test
+  // Rcpp::Rcout << "a11:"  << a11 << std::endl;
+  // Rcpp::Rcout << "f:"  << f << std::endl;
+  // Rcpp::Rcout << "Constant" << log_iwishart_InvA_const(nu,V_jj) << std::endl;
+  // Rcpp::Rcout << "Log_J" << log_J(nu,V_ij,a11) << std::endl;
+  // Rcpp::Rcout << "Trace" << trace(V_ij*(Omega0_ij-Omega1_ij))/2 << std::endl;
   
   
   return(f);
@@ -193,6 +193,11 @@ double log_GWish_NOij_pdf(double b, arma::mat D, arma::mat Omega, int i, int j, 
     Omega_new = Omega; Omega_new(j-1,j-1)=c(0,0);
     
     D1 = D(j-1,j-1);
+    Rcpp::Rcout << "c:"  << c(0, 0) << std::endl;
+    Rcpp::Rcout << "b:"  << b << std::endl;
+    Rcpp::Rcout << "D1:"  << D1 << std::endl;
+    Rcpp::Rcout << "Ome22:"  << Ome22 << std::endl;
+    Rcpp::Rcout << "Omega_new:"  << Omega_new << std::endl;
     f = -log_iwishart_InvA_const(b,D1)+(b-2)/2*log(det(Ome22))-trace(D*Omega_new)/2;
     
   } else {
@@ -210,6 +215,8 @@ double log_GWish_NOij_pdf(double b, arma::mat D, arma::mat Omega, int i, int j, 
     
     A = Ome11-Ome12*solve(Ome22,Ome12.t());
     
+    Rcpp::Rcout << "A:"  << A << std::endl;
+    
     double log_Joint, logK2by2, logKii;
     log_Joint = (b-2)/2*log(det(Omega))-trace(D*Omega)/2;
     
@@ -217,7 +224,11 @@ double log_GWish_NOij_pdf(double b, arma::mat D, arma::mat Omega, int i, int j, 
     D_ij  << D(i-1,i-1) << D(i-1,j-1) << arma::endr << D(i-1,j-1) << D(j-1,j-1) << arma::endr;
     logK2by2 = log_dWish(A,b,D_ij);
     
-    V = inv(D_ij); Dii = 1/V(1,1); Aii=A(0,0);
+    Rcpp::Rcout << "D_ij:"  << D_ij << std::endl;
+    V = inv(D_ij); Dii = 1/V(1,1); Aii=A(0,0); //error D_ij not invertible
+    Rcpp::Rcout << "V"  << D_ij << std::endl;
+    Rcpp::Rcout << "Dii:"  << Dii << std::endl;
+    Rcpp::Rcout << "Aii:"  << Aii << std::endl;
     logKii = log_dWish(Aii,b+1,Dii);
     
     f = log_Joint+logKii-logK2by2;

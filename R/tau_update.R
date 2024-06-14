@@ -52,14 +52,13 @@ log_tau_posterior <- function(tau_k, omega_k, sigma_0, alpha_tau, lambda_2, trun
     return(0)
   }
   
-  #True params
-  # tau_k <- tau_truth[8]
-  # omega_k <- omegaK_truth[[8]]
-  # sigma_0 <- matinv(omega0_truth)
- # alpha_tau <- alpha_truth
-  #lambda_2  <- lam2_truth
-  # trunc   <- c(0, 100)
-  # m_iter  <- 100
+ #  #True params
+ # k <- 7
+ # tau_k <- tau_vec[k]
+ # omega_k <- omega_k[[k]]
+ # sigma_0 <- matinv(omega_0)
+ # trunc   <- c(0, 100)
+ # m_iter  <- 100
   
   #Parameters
   b   <- max(tau_k, 3)

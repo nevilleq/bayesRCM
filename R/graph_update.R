@@ -10,6 +10,18 @@
 #'
 #' @examples
 graph_update <- function(row_col, df, D, v, S, adj, omega, lambda_1) {
+  
+  # k = 8;
+  # row_col  = row_col;
+  # df       = tau_vec[k] + 2;
+  # D        = sigma_0 * tau_vec[k];
+  # v        = vk[k];
+  # S        = Sk[[k]];
+  # adj      = adj_k[[k]];
+  # omega    = omega_k_test[[k]];
+  # lambda_1 = lambda_1;
+
+  
     # Network size
     p <- nrow(omega)
 
@@ -28,22 +40,26 @@ graph_update <- function(row_col, df, D, v, S, adj, omega, lambda_1) {
     D_post <- D + S;
 
     #Adjacency threshold / graph
+    omegak1 <- omega
     omega  <- omega * adj
     accept <- rep(FALSE, (p - 1))
     
     # Sample off-diagonal elements
     i <- 1; # current 1st row/col is old row_col-th row/col (i.e. the one we want to update)
     for (j in 2:p) {
+      print(j)
+     # j = 8;
         #1. Propose G'
         #a. calculate the logit of no edge vs an edge (p is prob of having no edge)
         w <- log_H(b_post, D_post, omega, i, j) + lambda_1
 
         #Obtain probability of edge
         p <- 1 / (1 + exp(w)) #expit --> probability of edge
+        print(paste0("p(Edge):", as.numeric(p)))
         ij_cur  <- adj[i, j]
         ij_prop <- runif(1) <= p
-        #print(paste0("ij_cur:", ij_cur))
-        #print(paste0("ij_prop:", ij_cur))
+        print(paste0("ij_cur:", as.numeric(ij_cur)))
+        print(paste0("ij_prop:", as.numeric(ij_prop)))
         
         #b. If it's accepted (yay!)
         if (ij_prop != ij_cur) { #If accepted
@@ -59,15 +75,48 @@ graph_update <- function(row_col, df, D, v, S, adj, omega, lambda_1) {
 
 
             # step3: update G using MH, accept G' with mh_prob ratio r2
-            mh_prob <- log_GWish_NOij_pdf(df, D, omega_prop, i, j, ij_cur) -
-                       log_GWish_NOij_pdf(df, D, omega_prop, i, j, ij_prop);
+            #print("NOij")
+            #log prob of current
+            tryCatch({
+              log_cur <- log_GWish_NOij_pdf(df, D, omega_prop, i, j, ij_cur)
+            }, error = function(e) {
+              conditionMessage(e)
+            })
+            #log prob of proprosal 
+            tryCatch({
+              log_prop <- log_GWish_NOij_pdf(df, D, omega_prop, i, j, ij_prop)
+            }, error = function(e) {
+              conditionMessage(e)
+            })
+            
+            #Handle cases where null 
+            if (is.null(log_cur) & (!is.null(log_prop))) {
+              print("current null")
+              mh_prob <- 0 #accept proposal
+            } else if ((!is.null(log_cur)) & is.null(log_prop)) {
+              print("prop null")
+              mh_prob <- -Inf #reject
+            } else if ((is.null(log_cur)) & is.null(log_prop)) {
+              print("both null")
+              mh_prob <- -Inf #reject
+            } else {
+              mh_prob <- log_cur - log_prop; #accept w prob mh_prob
+            }
 
             if (log(runif(1)) < mh_prob) { #If accepted
                 adj[i,j] <- adj[j,i] <- ij_cur <- ij_prop
 
 
                 # step 4: update \omega_ij if G' is accepted via paper
-                omega <- gwish_ij_update(b_post, D_post, omega, i, j, ij_cur)
+                #print("Update")
+                omega_temp <- tryCatch({
+                  gwish_ij_update(b_post, D_post, omega, i, j, ij_cur)},
+                  error = function(e) {
+                  conditionMessage(e)
+                })
+                if(!is.null(omega_temp)) {
+                  omega <- omega_temp
+                }
 
                 # If omega update is not symmetric, force symmetry by upper triangle via Matrix package
                 # if (!Matrix::isSymmetric(omega)) {
@@ -105,6 +154,9 @@ graph_update <- function(row_col, df, D, v, S, adj, omega, lambda_1) {
 #' @examples
 gwish_ij_update <- function(b, D, omega, i, j, ij_cur) {
 
+    #Test
+    #i = 1; j=8; ij_cur = TRUE; b = b_post; D=D_post; omega = omega_prop;
+  
     #Graph dimension of network/graph
     p <- nrow(omega)
 
@@ -126,22 +178,26 @@ gwish_ij_update <- function(b, D, omega, i, j, ij_cur) {
         #Reorder & take Cholesky decomp
         reorder <- c(setdiff(1:p, c(i,j)), i, j)
         o_pt    <- omega[reorder, reorder]
-        
-        # #Check to make sure symmetric, if not force by upper diag? (or lower?)
-        # if (!isSymmetric(o_pt)) {
-        #   print("Not symmetric")
-        #   o_pt <- as.matrix(Matrix::forceSymmetric(o_pt, uplo = "U"))
-        # }
-        
-        # #Check to make sure PD
-        # if (any(eigen(o_pt)$values < 0)) {
-        #   o_pt <- o_pt |>
-        #     (\(x) {as.matrix(Matrix::nearPD(x)$mat)})() 
-        # }
+        print(paste0("Det(o_pt): ", det(o_pt)))
         
         #Cholesky decomp (must be Sym, PD)
-        #print(o_pt)
-        R <- matchol(o_pt)
+        if(any(eigen(o_pt)$values < 0)) {
+          print("non-PD o_pt, trying again")
+          o_ptpd <- o_pt |>
+            (\(x) {as.matrix(Matrix::nearPD(x)$mat)})() #Find closest PD matrix
+          R <- matchol(o_ptpd)  #cholesky decomp
+        } else {
+          R <- matchol(o_pt)
+        }
+        
+        # #Cholesky decomp (must be Sym, PD)
+        # R <- tryCatch({matchol(o_pt)}, error = function(e) {conditionMessage(e)})
+        # if(is.character(R)) {
+        #   print("No PD, trying again...")
+        #   o_ptpd <- o_pt |>
+        #     (\(x) {as.matrix(Matrix::nearPD(x)$mat)})()
+        #   R <- matchol(o_ptpd) 
+        # }
 
         #Posterior params
         m_post      <- -R[p - 1, p - 1] * D[i,j] / D[j,j]
@@ -157,3 +213,52 @@ gwish_ij_update <- function(b, D, omega, i, j, ij_cur) {
     #Return
     return(omega)
 }
+
+#Source scripts for testing
+#Rcpp::sourceCpp("./src/bayesRCM_helper_funcs.cpp")
+
+# log_GWish_NOij_pdf <- function(b, D, Omega, i, j, edgeij) {
+#   # Compute log p(Omega\omega(i,j)) up to the normalizing constant of G-Wishart
+# 
+#   #b = b_post; D = D_post; i = 1; j = 2; edgeij = FALSE; Omega = omega_prop;
+# 
+#   if (edgeij == 0) {
+#     Omega[i, j] <- 0
+#     Omega[j, i] <- 0
+# 
+#     Ome12 <- Omega[j, -j] %>% matrix()
+#     Ome22 <- Omega[-j, -j]
+# 
+#     c <- t(Ome12) %*% solve(Ome22) %*% Ome12
+#     Omega_new <- Omega
+#     Omega_new[j, j] <- c[1, 1]
+# 
+#     D1 <- as.matrix(D[j, j])
+#     f <- -log_iwishart_InvA_const(b, D1) + (b - 2) / 2 * log(det(Ome22)) - mattr(D %*% Omega_new) / 2
+#   } else {
+#     Ome12 <- Omega
+#     temp_row <- Ome12[i+1, ]
+#     Ome12[i+1, ] <- Ome12[j, ]
+#     Ome12[j, ]   <- temp_row
+#     Ome12 <- Ome12[i:(i+1), -c(i, j)]
+# 
+#     Ome22 <- Omega[-c(i, j), -c(i, j)]
+#     Ome11 <- matrix(c(Omega[i, i], Omega[i, j], Omega[i, j], Omega[j, j]), nrow = 2, byrow = TRUE)
+# 
+#     A <- Ome11 - Ome12 %*% solve(Ome22) %*% t(Ome12)
+#     log_Joint <- (b - 2) / 2 * log(det(Omega)) - sum(diag((D %*% Omega))) / 2
+# 
+#     D_ij <- matrix(c(D[i, i], D[i, j], D[i, j], D[j, j]), nrow = 2, byrow = TRUE)
+#     logK2by2 <- log_dWish(A, b, D_ij)
+# 
+#     V <- matinv(D_ij)
+#     Dii <- as.matrix(1 / V[2, 2])
+#     Aii <- as.matrix(A[1, 1])
+#     logKii <- log_dWish(Aii, b + 1, Dii)
+# 
+#     f <- log_Joint + logKii - logK2by2
+#   }
+#   return(f)
+# }
+# 
+# 

@@ -28,6 +28,7 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
   # library(bayesRCM)
   # library(doParallel)
   #Set up parallel clusters (later may want to have multiple nodes (chains) to process multiple subjects (cores))
+  closeAllConnections()
   cl <- parallel::makeCluster(n_cores)
   on.exit(parallel::stopCluster(cl)) #When done stop cluster
   doParallel::registerDoParallel(cl) #Initialize clusters
@@ -177,11 +178,6 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
     opt.df %>%
     pull(lambda)
   
-  #E-bayes for alpha_tau
-  #alpha_tau <-
-  #  lambda_2 * mean(tau_vec) /
-  #  (1 - dgamma(100, alpha_tau, rate = lambda_2) / pgamma(100, alpha_tau, rate = lambda_2))
-  
   #Set up storage for results
   #Omegas
   omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
@@ -189,6 +185,8 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
   omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
   pct_omega_acc <- vector(mode = "integer", length = n_samples)
   pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
+  null_sub    <- array(0, c(K, n_burn + n_samples))
+  null_rowcol <- c()
 
   #Taus, Alpha, Lambda_2
   accept_tau     <- matrix(NA, nrow = 0, ncol = K)
@@ -215,7 +213,7 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
   #Loop through sampling algorithm n_samples + n_burn # times
   for (t in 1:n_iter) {
     #Print iteration for early testing
-    #print(paste0("Iteration: ", t))
+    print(paste0("Iteration: ", t))
     
     #Update Lambdas via direct sampling
     #Lambda 1 sparsity-inducing penalty on G_k
@@ -256,10 +254,12 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
       .noexport = c("graph_update","gwish_ij_update", "rgwish") #Functions necessary to export
     ) %dopar% {
       #for(k in 1:k) {
-      #print(paste0("Subject -- ", k))
-      #Propose/update G_k, Omega_k via
-      update <-
-        graph_update(
+      tryCatch({
+        #    for(k in 1:K) {
+        #print(paste0("Subject -- ", k))
+        # Propose/update G_k, Omega_k via
+        #k <- 7
+        update <- graph_update(
           row_col  = row_col,
           df       = tau_vec[k] + 2,
           D        = sigma_0 * tau_vec[k],
@@ -267,30 +267,44 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
           S        = Sk[[k]],
           adj      = adj_k[[k]],
           omega    = omega_k[[k]],
+          #omega    = omega_k_last[[k]],
           lambda_1 = lambda_1
         )
-      
-      #Record acceptance rate
-      accept_k[k] <- update$accept
-      
-      #Upper triangular and averaged transpose for computational stability
-      tri_adj <- update$adj
-      tri_adj[lower.tri(tri_adj, diag = T)] <- 0
-      
-      #Update omega_k
-      omega_k_update <- BDgraph::rgwish(1, tri_adj, vk[k] + tau_vec[k] + 2, Sk[[k]] + sigma_0 * tau_vec[k])
-      omega_k_update <- (omega_k_update + t(omega_k_update)) / 2 # for computational stability
-      #omega_k_update[[k]] <- BDgraph::rgwish(1, tri_adj, vk[k] + tau_vec[k] + 2, Sk[[k]] + sigma_0 * tau_vec[k])
-      #omega_k_update[[k]] <- (omega_k_update[[k]] + t(omega_k_update[[k]])) / 2 # for computational stability
-      
-      #Return updated omega_k 
-      return(omega_k_update)
+        
+        # Record acceptance rate
+        accept_k[k] <- update$accept
+        
+        # Upper triangular and averaged transpose for computational stability
+        tri_adj <- update$adj
+        tri_adj[lower.tri(tri_adj, diag = TRUE)] <- 0
+        
+        # Update omega_k
+        omega_k_update <- BDgraph::rgwish(1, tri_adj, vk[k] + tau_vec[k] + 2, Sk[[k]] + sigma_0 * tau_vec[k])
+        omega_k_update <- (omega_k_update + t(omega_k_update)) / 2 # for computational stability
+        # Update omega_k
+        #omega_Gk_update[[k]] <- BDgraph::rgwish(1, tri_adj, vk[k] + tau_vec[k] + 2, Sk[[k]] + sigma_0 * tau_vec[k])
+        #omega_Gk_update[[k]] <- (omega_k_update + t(omega_k_update)) / 2
+        
+        # Return updated omega_k
+        return(omega_k_update)
+      }, error = function(e) {
+        cat("Error occurred in subject: ", k, "\n", conditionMessage(e), "\n")
+        #Optionally, print additional diagnostic information or take other actions
+      })
     }
     
-    #Pass back to omega_k
-    omega_k  <- omega_Gk_update
-    #omega_k <- omega_k_update
-    
+    #Pass back to omega_k, check null
+    null_updates <- map_lgl(omega_Gk_update, is.null)
+    if(any(null_updates)) {
+      #Grab the index/indices
+      indx <- which(null_updates)
+      null_sub[indx, t] <- 1 #1 yes null
+      #null_rowcol <- rbind(null_rowcol, c(row_col, length(indx))) #record which row/col & how many
+      omega_Gk_update[indx] <- omega_k_last[indx] #Don't update, keep last
+      warning(paste0("Null update for subjects ", paste0(indx, collapse = ", ")))
+    }
+    omega_k <- omega_Gk_update
+
 
     #Tau_k update
     tau_k <-
@@ -375,6 +389,7 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
       omega_0    = omega0_res,
       omega_k    = omegas_res,
       omega_acc  = pct_omega_acc,
+      null_sub   = null_sub,
       tau_k       = tau_res,
       tau_acc     = accept_tau,
       tau_step    = step_tau_mat,

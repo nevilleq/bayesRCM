@@ -28,7 +28,7 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
   # library(bayesRCM)
   # library(doParallel)
   #Set up parallel clusters (later may want to have multiple nodes (chains) to process multiple subjects (cores))
-  closeAllConnections()
+  #closeAllConnections()
   cl <- parallel::makeCluster(n_cores)
   on.exit(parallel::stopCluster(cl)) #When done stop cluster
   doParallel::registerDoParallel(cl) #Initialize clusters

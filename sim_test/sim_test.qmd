@@ -1,0 +1,3361 @@
+---
+title: "Testing Tau - Alpha - Lambda"
+author: "Q"
+format: 
+  html:
+    toc: true
+    toc-depth: 2
+  pdf:
+    toc: true
+    toc-depth: 2
+header-includes:
+   \usepackage{float}
+   \floatplacement{figure}{H}
+---
+
+```{r include = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(gt)
+library(MASS)
+library(Rcpp)
+library(RcppArmadillo)
+library(glasso)
+library(GIGrvg)
+library(bayesRCM)
+#library(doParallel)
+#library(Matrix)
+
+#Controlling figure output in markdown, setting options & root dir
+knitr::opts_chunk$set(
+#  fig.height =   
+  fig.width = 6,
+#  fig.asp = .5,
+  out.width = "90%",
+#  out.height = 
+ fig.align = "center",
+  cache = FALSE,
+  echo  = TRUE,
+  root.dir = rprojroot::find_package_root_file() #not working?
+)
+
+#My Colours (from viridis)
+my_purple <- "#440154FF"
+my_yellow <- "#FDE725FF"
+#Set Theme for ggplot2
+theme_set(theme_minimal() + 
+          theme(plot.title = element_text(hjust = 0.5),
+                plot.subtitle = element_text(hjust = 0.5),
+                legend.position = "bottom"))
+#Set Scientific notation output for knitr
+options(scipen = 999)
+```
+
+
+# data generation  
+
+```{r}
+#Alpha lambda
+alpha <- 20
+lambda <- 0.5
+
+#Histogram
+(100 - truncdist::rtrunc(spec = "gamma", a = 3, b = 100,
+                  n = 1000, shape = alpha, rate = lambda)) |> hist()
+
+#Sim data
+sim_data.df <- 
+  sim_data(subjects = 20, volumes = 1000, rois = 10, alpha_tau = alpha,
+           lambda_2 = lambda, prop_true_con = 0.1, write = FALSE,
+           seed_0   = 4, seed_k = 5)
+
+#Data & params
+y           <- sim_data.df$data_list
+true_params <- sim_data.df$true_params
+tau_truth   <- true_params$tau_k
+true_params$alpha_tau -> alpha_truth
+true_params$lambda_2  -> lam2_truth
+true_params$omega_0  -> omega0_truth
+true_params$omega_k  -> omegaK_truth
+```
+
+# $\tau_k$ with fixed $\Omega_0, \Omega_k/G_k$, $\alpha_tau$, $\lambda_2$  
+
+## One simulation seed   
+
+```{r tauk_fix_all, eval = FALSE, echo = FALSE}
+#Set burn and iter
+priors = NULL; n_samples = 1000; n_burn = 1000; n_cores = 7; n_updates = 10;
+
+  #Grab no. of subjects, rois, volumes
+  K  <- length(y)
+  p  <- ncol(y[[1]])
+  vk <- map_dbl(y, nrow)
+  Sk <- map(.x = y, ~t(.x) %*% .x)
+
+  #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
+  alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1/10, 1/10, 1/10)
+  
+  #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
+  mu_tau    <- 50 #Hyper-mean of tau_k = alpha_tau / lambda_2
+  sigma_tau <- 20 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
+  lambda_2  <- 1/2 #Fix rate lambda_2
+  alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
+  
+  #Check distributions
+  #rnorm(1000, mu_tau, sd = sigma_tau) %>% hist() #mean tau_k prior
+  #rnorm(1000, mu_tau, sd = sigma_tau * lambda_2) %>% hist() #alpha prior
+  #(100 - rgamma(1000, alpha_tau, rate = lambda_2)) %>% hist() #tau distribution
+
+  #MCMC step size/window
+  step_tau     <- rep(15, K)
+  step_alpha   <- 2
+  step_lambda2 <- 0.1
+  
+  #How many updates during burn to adapt window/step-size
+  n_updates <- floor(n_samples / n_updates)
+
+  #Initialize estimates for Omega_k, Omega_0
+  #Omega_k - tune lambda by bic and then grab G and Omega_0
+  lambda_grid <- 10^seq(-1, 0.5, length.out = 20)
+  bic         <- vector(mode = "numeric", length = 0)
+
+  #Tune lambda for independent glasso
+  for (lam in lambda_grid) {
+    # omega_k <- ind_graphs(y, lam)
+    # bic   <- c(bic, bic_cal(y, omega_k))
+    omega_k <- ind_graphs(y, lam)
+    omega_k <- array(unlist(omega_k), dim = c(p, p, K))
+    bic     <- c(bic, bic_cal(y, omega_k))
+  }
+  
+  #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0
+  omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
+  adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
+  #omega_0 <- Reduce("+", omega_k) / K #elementwise mean
+  omega_0 <- elementwise_median(omega_k) #elementwise median, more robust to outliers
+  sigma_0 <- solve(omega_0)
+
+  #Initialize estimates for tau_k
+  tau_vec   <- vector(mode = "numeric", length = K)
+
+  #Iterate over each subject, find optimal tau_k based on posterior in 1D
+  for (k in 1:K) {
+    #print(k)
+    #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
+    f_opt <- function(tau) {
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100)
+    }
+    #Optimize in 1D
+    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+  }
+  
+  #Initialize alpha_tau from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
+  f_opt <- function(alpha_tau) {
+    -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  alpha_tau <- c(optimize(f_opt, lower = 1, upper = 50, tol = 0.01)$min)
+  
+  #Initialize lambda_2 from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
+  f_opt <- function(lambda_2) {
+    -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
+  
+  #Set up storage for results
+  #Omegas
+  omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
+  accept_k   <- vector(mode = "numeric", length = K)
+  omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
+  pct_omega_acc <- vector(mode = "integer", length = n_samples)
+  pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
+
+  #Taus, Alpha, Lambda_2
+  accept_tau     <- matrix(NA, nrow = 0, ncol = K)
+  accept_alpha   <- matrix(NA, nrow = 0, ncol = 1)
+ # accept_alpha   <- matrix(NA, nrow = 0, ncol = K)
+  accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
+  step_tau_mat   <- step_tau #Adaptive window for MH tau
+  #step_alpha_mat <- step_alpha 
+  #step_lam2_mat  <- step_lambda2
+  tau_res        <- array(NA, c(K, n_samples))
+  #mu_tau_res     <- array(NA, c(1, n_updates + 1))
+  #sigma_tau_res  <- array(NA, c(1, n_updates + 1))
+  alpha_res      <- vector(mode = "numeric", length = n_samples)
+  #alpha_res      <- array(NA, c(K, n_samples))
+  
+  #Lambdas
+  lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
+
+  #Set timer
+  timer   <- 0
+  t_start <- proc.time()
+  n_iter  <- (n_burn + n_samples)
+
+  #Loop through sampling algorithm n_samples + n_burn # times
+  for (t in 1:n_iter) {
+    #Print iteration for early testing
+    #print(paste0("Iteration: ", t))
+    
+    #Update Lambdas via direct sampling
+    #Lambda 1 sparsity-inducing penalty on G_k
+    card_k   <- (sapply(adj_k, sum) - p)/2 #Cardinality of G_k / # edges
+    lambda_1 <- rgamma(1, alpha[1] + K, rate = beta[1] + sum(card_k))
+
+    #Lambda 2 Gamma rate parameter for df/shrinkage tau_k prior
+    #lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
+    # lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
+    #                                  mu_tau, sigma_tau, window = step_lambda2)
+    # lambda_2       <- lambda_next$lambda_2
+    # accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
+    lambda_2 <- lam2_truth
+
+    #Lambda 3 Sparse L-1 penalty on group precision omega_0 prior
+    card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges or non-zero elements
+    lambda_3 <- rgamma(1, alpha[3] + card_0, beta[3] + sum(abs(omega_0))/2)
+
+    #Invert for Covariance & randomly select row_col pair
+    sigma_0 <- matinv(omega_0)
+    row_col <- sample(1:p, 1)
+    
+    #Pass back to omega_k
+    omega_k  <- omegaK_truth
+    #omega_k <- omega_k_update
+    
+
+    #Tau_k update
+    tau_k <-
+      map(
+        .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
+        ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x])
+      ) #Return list object
+    # for (k in 1:K) {
+    #   print(paste0("sub: ", k))
+    #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
+    # }
+    accept_tau <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
+    tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
+
+    #Adaptive tau step-size/window for MH proposal
+     if (t %% n_updates == 0 & t <= n_burn) {
+        #Compute acceptance rate (colwise mean)
+        accept_rate <- apply(accept_tau, 2, mean)
+        #For each subject, adjust tau_k proposal (lognormal) step size
+         for (k in 1:K) {
+           if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
+            step_tau[k] <- min(20, step_tau[k] + 1)
+           } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
+             step_tau[k] <- max(1, step_tau[k] - 1)
+            }
+         }
+         step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
+         accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
+     }
+    
+    #Old alpha update
+    # alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
+    # alpha_tau    <- alpha_next$alpha_tau
+    # accept_alpha <- rbind(accept_alpha, alpha_next$accept)
+    alpha_tau <- alpha_truth
+    
+    
+
+    #Update Omega_0 via Wang and Li (2012) + step-proposal distribution
+    # D       <- apply(mapply('*', omega_k, tau_vec, SIMPLIFY = 'array'), 1:2, sum)
+    # omega_0 <- omega0_update(omega_0, D, sum(tau_vec), lambda_3)
+    # pct_accept <- omega_0$pct_accept #Off-diagonal acceptance%
+    # omega_0 <- omega_0$omega #Precision matrix itself
+    omega_0 <- omega0_truth
+
+    #Save those results after burn-in
+    if(t > n_burn) {
+      t_burn <- t - n_burn
+    #  omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
+    #  omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
+      tau_res[, t_burn]      <- tau_vec
+     # alpha_res[t_burn]      <- alpha_tau
+    #  lambda_res[, t_burn]   <- c(lambda_1, lambda_2, lambda_3)
+     # pct_omega_acc[t_burn]  <- pct_accept
+    #  pct_k_acc[t_burn, ]    <- accept_k
+    }
+
+    #Track temporal progress (every 20% progress update)
+    if (t %% floor(0.2 * (n_samples + n_burn))) {
+      t_now   <- proc.time()
+      timer   <- c(timer, (t_now - t_start)[3])
+      t_start <- t_now
+    }
+  }
+
+  #Result list of results
+  result <-
+    list(
+     # omega_0    = omega0_res,
+    #  omega_k    = omegas_res,
+    #  omega_acc  = pct_omega_acc,
+      tau_k       = tau_res,
+      tau_acc     = accept_tau,
+      tau_step    = step_tau_mat,
+    #  alpha_tau   = alpha_res,
+    #  alpha_acc   = accept_alpha,
+      #alpha_step  = step_alpha_mat,
+    #  lambdas     = lambda_res, 
+    #  lambda_acc  = accept_lambda2,
+    #  lambda_step = step_lam2_mat,
+      timer       = timer
+    )
+
+#write out
+#write_rds(result, "./testing/tau_k_fixed_all.rds")
+```
+
+### $\tau_k$ diagnostics
+
+```{r tauk_diag_all, eval = FALSE, echo = FALSE}
+#Read in result to display diagnostics
+#result <- read_rds("./testing/tau_k_fixed_all.rds")
+n_iter <- ncol(result$tau_k)
+k <- nrow(result$tau_k)
+set.seed(4)
+
+#Truth data frame for plotting
+tau_true.df <- 
+  tibble(
+    tau = str_c("Sub. ", 1:k),
+    true_value = tau_truth
+  )
+
+#Diagnostics
+#Tauk
+tauk.gg <-
+  t(result$tau_k) %>%
+  as.data.frame() %>%
+  mutate(
+    iteration = 1:nrow(.)
+  ) %>%
+  rename_with(
+    .cols = -iteration,
+    ~str_replace(.x, "V", "Sub. ")
+  ) %>%
+  pivot_longer(
+    cols = -iteration,
+    names_to = "tau",
+    values_to = "value"
+  ) %>%
+  group_by(tau) %>%
+  mutate(post_med = median(value), post_mean = mean(value)) %>%
+  ungroup() %>%
+  left_join(
+    .,
+    tau_true.df,
+    by = "tau"
+  ) %>%
+  mutate(
+    true_value = ifelse(iteration == 1, true_value, NA),
+    post_med   = ifelse(iteration == 1, post_med, NA),
+    post_mean  = ifelse(iteration == 1, post_mean, NA)
+  ) %>%
+  mutate(
+    tau = as.factor(tau) %>% fct_reorder(true_value, mean, .desc = TRUE, .na_rm = TRUE)
+  ) %>%
+  ggplot(aes(x = iteration, y = value, colour = tau)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(aes(yintercept = true_value), colour = "red", linetype = 2, alpha = 0.6) +
+  geom_hline(aes(yintercept = post_med), colour = "blue", linetype = 2, alpha = 0.6) +
+  facet_wrap(~tau, scales = "fixed", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+ # scale_y_continuous(breaks = seq(0, 100, by = 25), limits = c(0, 100)) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Value",
+    title = "Tau_k Chain with Fixed G_k/Omega_k and Omega_0",
+    caption = "True value in red."
+  ) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+
+#Tau_k acceptance
+tauk_acc.gg <-
+result$tau_acc %>%
+  as.data.frame() %>%
+  mutate(
+    iteration = 1:nrow(.)
+  ) %>%
+  rename_with(
+    .cols = -iteration,
+    ~str_replace(.x, "V", "Sub. ")
+  ) %>%
+  pivot_longer(
+    cols = -iteration,
+    names_to = "tau",
+    values_to = "value"
+  ) %>%
+  group_by(tau) %>%
+  summarise(pct_acc = mean(value)) %>%
+  ungroup() %>%
+  mutate(
+    tau = as.factor(tau) %>% fct_reorder(pct_acc, .desc = FALSE)
+  ) %>%
+  arrange(tau) %>%
+  ggplot(aes(x = tau, y = pct_acc, colour = pct_acc, fill = pct_acc)) +
+  geom_col() +
+  scale_colour_viridis_c("Pct. Accept", breaks = seq(0.9, 1, by = 0.05), labels = scales::percent, direction = -1) +
+  scale_fill_viridis_c("Pct. Accept", breaks = seq(0.9, 1, by = 0.05), labels = scales::percent, direction = -1) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "Subject",
+    y = "Tau Acceptance",
+    title = "Tau Acceptance for Fixed G_k/Omega_k, Omega_0, alpha, lambda"
+  ) +
+  theme(legend.position = "left") +
+  coord_flip() +
+  theme_minimal()
+
+#N updates
+n_updates <- nrow(result$tau_step) - 1
+
+#Step size / window changes
+tau_step.gg <-
+  result$tau_step %>%
+  as.data.frame() %>%
+  rename_with(~str_replace(.x, "V", "Sub. ")) %>%
+  slice(-1) %>%
+  mutate(
+    update = 1:nrow(.)
+  ) %>%
+  dplyr::select(update, everything()) %>%
+  as_tibble() %>%
+  pivot_longer(
+    cols = -update,
+    names_to = "subject",
+    values_to = "step_size"
+  ) %>%
+  mutate(
+    subject = as.factor(subject) %>% fct_reorder(step_size, mean, .desc = T)
+  ) %>%
+  ggplot(aes(x = update, y = step_size, colour = subject, fill = subject)) +
+  geom_point(size = 4, alpha = 0.2) +
+  geom_path(size = 2, alpha = 0.4) +
+  labs(x = "Update", y = "MCMC proposal step size") +
+  scale_colour_viridis_d("Subject") +
+  scale_fill_viridis_d("Subject") +
+  scale_x_continuous(breaks = 1:n_updates, minor_breaks = 1:n_updates)
+```
+
+```{r eval = FALSE, echo = FALSE, fig.height=8, fig.width=8, warning = FALSE}
+#MCMC Convergence
+tauk.gg
+tauk_acc.gg
+tau_step.gg
+
+#Histograms
+# hist(tau_truth - apply(result$tau_k, 1, mean), breaks = 20)
+# hist(tau_truth - apply(result$tau_k, 1, median), breaks = 20)
+sd(tau_truth) - sd(result$tau_k)
+
+#Recovery
+apply(result$tau_k, 1, mean) - tau_truth
+sqrt(mean((apply(result$tau_k, 1, mean) - tau_truth)^2))
+apply(result$tau_k, 1, median) - tau_truth
+sqrt(mean((apply(result$tau_k, 1, median) - tau_truth)^2))
+
+#Summary
+sd(tau_truth) - sd(apply(result$tau_k, 1, mean))
+summary(apply(result$tau_k, 1, mean) - tau_truth)
+summary(apply(result$tau_k, 1, median) - tau_truth)
+
+#Barplot of ordered trend
+bar_num.gg <-
+  cbind(tau_truth, apply(result$tau_k, 1, mean)) %>%
+  as_tibble() %>%
+  arrange(desc(tau_truth)) %>%
+  mutate(
+    order = 1:nrow(.) %>% as.factor(),
+  ) %>%
+  pivot_longer(
+    cols = c(tau_truth, V2),
+    names_to = "type",
+    values_to = "value"
+  ) %>%
+  mutate(
+    type = ifelse(str_detect(type, "V2"), "Est. Tau", "True Tau") %>%
+           as.factor() %>%
+          fct_relevel("True Tau"),
+    text = as.character(round(value, 0)),
+  ) %>%
+  ggplot(aes(x = order, y = value, fill = type)) +
+  geom_bar(position = "dodge", stat = "identity", width = 0.6) +
+  geom_text(aes(label = text, colour = type), size = 4, vjust = -0.8, hjust = 0.1, position = "dodge") +
+  scale_fill_viridis_d("True vs. Est.") +
+  scale_colour_viridis_d("True vs. Est.")
+  
+bar_num.gg
+#ggsave("./testing/tau_only_bar_raw.png", bar_num.gg)
+ggsave("./testing/tau_only_bar_100m.png", bar_num.gg)
+
+# result$tau_step %>%
+#   as.data.frame() %>%
+#   mutate(tau_step = paste0("Adaptive step ", 1:nrow(.))) %>%
+#   rename_with(
+#     .cols = everything(),
+#     ~str_replace(.x, "V", "Subj. ")
+#   ) %>%
+#   dplyr::select(tau_step, everything()) %>%
+#   group_by(tau_step) %>%
+#   gt() %>%
+#   tab_header(title = "Adaptive Tau-proposal Step-size/Variance")
+```
+
+## Ten simulation seeds
+
+```{r eval = FALSE, echo = FALSE}
+#Function to fit tau_k for a given seed_k with all else fixed at the true values
+fit_tau <- function(alpha, lambda, volumes, seed_k) {
+#Sim data
+sim_data.df <- 
+  sim_data(subjects = 20, volumes = volumes, rois = 10, alpha_tau = alpha,
+           lambda_2 = lambda, prop_true_con = 0.1, write = FALSE,
+           seed_0   = 4, seed_k = seed_k)
+
+#Data & params
+y           <- sim_data.df$data_list
+true_params <- sim_data.df$true_params
+tau_truth   <- true_params$tau_k
+true_params$alpha_tau -> alpha_truth
+true_params$lambda_2  -> lam2_truth
+true_params$omega_0  -> omega0_truth
+true_params$omega_k  -> omegaK_truth
+
+#Set burn and iter
+priors = NULL; n_samples = 1000; n_burn = 1000; n_cores = 7; n_updates = 10;
+
+  #Grab no. of subjects, rois, volumes
+  K  <- length(y)
+  p  <- ncol(y[[1]])
+  vk <- map_dbl(y, nrow)
+  Sk <- map(.x = y, ~t(.x) %*% .x)
+
+  #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
+  alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1/10, 1/10, 1/10)
+  
+  #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
+  mu_tau    <- 50 #Hyper-mean of tau_k = alpha_tau / lambda_2
+  sigma_tau <- 20 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
+  lambda_2  <- 1/2 #Fix rate lambda_2
+  alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
+  
+  #Check distributions
+  #rnorm(1000, mu_tau, sd = sigma_tau) %>% hist() #mean tau_k prior
+  #rnorm(1000, mu_tau, sd = sigma_tau * lambda_2) %>% hist() #alpha prior
+  #(100 - rgamma(1000, alpha_tau, rate = lambda_2)) %>% hist() #tau distribution
+
+  #MCMC step size/window
+  step_tau     <- rep(10, K)
+  step_alpha   <- 2
+  step_lambda2 <- 0.1
+  
+  #How many updates during burn to adapt window/step-size
+  n_updates <- floor(n_samples / n_updates)
+
+  #Initialize estimates for Omega_k, Omega_0
+  #Omega_k - tune lambda by bic and then grab G and Omega_0
+  lambda_grid <- 10^seq(-1, 0.5, length.out = 20)
+  bic         <- vector(mode = "numeric", length = 0)
+
+  #Tune lambda for independent glasso
+  for (lam in lambda_grid) {
+    # omega_k <- ind_graphs(y, lam)
+    # bic   <- c(bic, bic_cal(y, omega_k))
+    omega_k <- ind_graphs(y, lam)
+    omega_k <- array(unlist(omega_k), dim = c(p, p, K))
+    bic     <- c(bic, bic_cal(y, omega_k))
+  }
+  
+  #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0
+  omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
+  adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
+  #omega_0 <- Reduce("+", omega_k) / K #elementwise mean
+  omega_0 <- elementwise_median(omega_k) #elementwise median, more robust to outliers
+  sigma_0 <- solve(omega_0)
+
+  #Initialize estimates for tau_k
+  tau_vec   <- vector(mode = "numeric", length = K)
+
+  #Iterate over each subject, find optimal tau_k based on posterior in 1D
+  for (k in 1:K) {
+    #print(k)
+    #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
+    f_opt <- function(tau) {
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100)
+    }
+    #Optimize in 1D
+    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+  }
+  
+  #Initialize alpha_tau from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
+  f_opt <- function(alpha_tau) {
+    -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  alpha_tau <- c(optimize(f_opt, lower = 1, upper = 50, tol = 0.01)$min)
+  
+  #Initialize lambda_2 from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
+  f_opt <- function(lambda_2) {
+    -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
+  
+  #Set up storage for results
+  #Omegas
+  omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
+  accept_k   <- vector(mode = "numeric", length = K)
+  omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
+  pct_omega_acc <- vector(mode = "integer", length = n_samples)
+  pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
+
+  #Taus, Alpha, Lambda_2
+  accept_tau     <- matrix(NA, nrow = 0, ncol = K)
+  accept_alpha   <- matrix(NA, nrow = 0, ncol = 1)
+ # accept_alpha   <- matrix(NA, nrow = 0, ncol = K)
+  accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
+  step_tau_mat   <- step_tau #Adaptive window for MH tau
+  #step_alpha_mat <- step_alpha 
+  #step_lam2_mat  <- step_lambda2
+  tau_res        <- array(NA, c(K, n_samples))
+  #mu_tau_res     <- array(NA, c(1, n_updates + 1))
+  #sigma_tau_res  <- array(NA, c(1, n_updates + 1))
+  alpha_res      <- vector(mode = "numeric", length = n_samples)
+  #alpha_res      <- array(NA, c(K, n_samples))
+  
+  #Lambdas
+  lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
+
+  #Set timer
+  timer   <- 0
+  t_start <- proc.time()
+  n_iter  <- (n_burn + n_samples)
+
+  #Loop through sampling algorithm n_samples + n_burn # times
+  for (t in 1:n_iter) {
+    #Print iteration for early testing
+   # print(paste0("Iteration: ", t))
+    
+    #Update Lambdas via direct sampling
+    #Lambda 1 sparsity-inducing penalty on G_k
+    card_k   <- (sapply(adj_k, sum) - p)/2 #Cardinality of G_k / # edges
+    lambda_1 <- rgamma(1, alpha[1] + K, rate = beta[1] + sum(card_k))
+
+    #Lambda 2 Gamma rate parameter for df/shrinkage tau_k prior
+    #lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
+    # lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
+    #                                  mu_tau, sigma_tau, window = step_lambda2)
+    # lambda_2       <- lambda_next$lambda_2
+    # accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
+    lambda_2 <- lam2_truth
+
+    #Lambda 3 Sparse L-1 penalty on group precision omega_0 prior
+    card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges or non-zero elements
+    lambda_3 <- rgamma(1, alpha[3] + card_0, beta[3] + sum(abs(omega_0))/2)
+
+    #Invert for Covariance & randomly select row_col pair
+    sigma_0 <- matinv(omega_0)
+    row_col <- sample(1:p, 1)
+    
+    #Pass back to omega_k
+    omega_k  <- omegaK_truth
+    #omega_k <- omega_k_update
+    
+
+    #Tau_k update
+    tau_k <-
+      map(
+        .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
+        ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x])
+      ) #Return list object
+    # for (k in 1:K) {
+    #   print(paste0("sub: ", k))
+    #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
+    # }
+    accept_tau <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
+    tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
+
+    #Adaptive tau step-size/window for MH proposal
+     if (t %% n_updates == 0 & t <= n_burn) {
+        #Compute acceptance rate (colwise mean)
+        accept_rate <- apply(accept_tau, 2, mean)
+        #For each subject, adjust tau_k proposal (lognormal) step size
+         for (k in 1:K) {
+           if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
+            step_tau[k] <- min(20, step_tau[k] + 0.5)
+           } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
+             step_tau[k] <- max(1, step_tau[k] - 0.5)
+            }
+         }
+         step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
+         accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
+     }
+    
+    #Old alpha update
+    # alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
+    # alpha_tau    <- alpha_next$alpha_tau
+    # accept_alpha <- rbind(accept_alpha, alpha_next$accept)
+    alpha_tau <- alpha_truth
+    
+    
+
+    #Update Omega_0 via Wang and Li (2012) + step-proposal distribution
+    # D       <- apply(mapply('*', omega_k, tau_vec, SIMPLIFY = 'array'), 1:2, sum)
+    # omega_0 <- omega0_update(omega_0, D, sum(tau_vec), lambda_3)
+    # pct_accept <- omega_0$pct_accept #Off-diagonal acceptance%
+    # omega_0 <- omega_0$omega #Precision matrix itself
+    omega_0 <- omega0_truth
+
+    #Save those results after burn-in
+    if(t > n_burn) {
+      t_burn <- t - n_burn
+    #  omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
+    #  omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
+      tau_res[, t_burn]      <- tau_vec
+     # alpha_res[t_burn]      <- alpha_tau
+    #  lambda_res[, t_burn]   <- c(lambda_1, lambda_2, lambda_3)
+     # pct_omega_acc[t_burn]  <- pct_accept
+    #  pct_k_acc[t_burn, ]    <- accept_k
+    }
+
+    #Track temporal progress (every 20% progress update)
+    if (t %% floor(0.2 * (n_samples + n_burn))) {
+      t_now   <- proc.time()
+      timer   <- c(timer, (t_now - t_start)[3])
+      t_start <- t_now
+    }
+  }
+
+  #Result list of results
+  result <-
+    list(
+     # omega_0    = omega0_res,
+    #  omega_k    = omegas_res,
+    #  omega_acc  = pct_omega_acc,
+      tau_k       = tau_res,
+      tau_acc     = accept_tau,
+      tau_step    = step_tau_mat,
+    #  alpha_tau   = alpha_res,
+    #  alpha_acc   = accept_alpha,
+      #alpha_step  = step_alpha_mat,
+    #  lambdas     = lambda_res, 
+    #  lambda_acc  = accept_lambda2,
+    #  lambda_step = step_lam2_mat,
+      timer       = timer
+    )
+
+  #write out
+  write_rds(result, sprintf("./testing/tau_k_seed_%s.rds", as.character(seed_k)))
+  
+  #Status
+  print(sprintf("Tau_k sampling complete for seed_k = %s", as.character(seed_k)))
+}
+
+#Alpha lambda
+alpha <- 20
+lambda <- 0.4
+volumes <- 1000
+
+#Fit for seeds 1:10
+map(.x = 1:10, ~fit_tau(alpha, lambda, volumes, seed_k = .x))
+```
+
+### $\tau_k$ diagnostics
+
+```{r eval = FALSE, echo = FALSE, fig.height=12, fig.width=8, warning = FALSE}
+#Read in results
+in_files <- list.files("./testing/", pattern = "seed")
+in_files <- in_files[!str_detect(in_files, "png")]
+in_path  <- str_c("./testing/", in_files)
+
+#Data
+result.df <-
+  tibble(
+    in_path = in_path,
+    data    = map(.x = in_path, ~read_rds(.x)),
+    tau_res = map(data, "tau_k"),
+    tau_mean = map(.x = tau_res, ~apply(.x, 1, mean)),
+    tau_df   = map(
+                .x = tau_mean, 
+                ~tibble(
+                  tau_est = .x,
+                  subject  = str_c("Sub. ", 1:length(tau_est))
+                  )
+               ),
+    seed_k   = str_split(in_path, "_") %>% map_chr(4) %>% str_remove(".rds") %>% as.factor()
+  ) %>%
+  dplyr::select(seed_k, tau_df)
+
+#Get true values
+#Alpha lambda
+alpha <- 20
+lambda <- 0.4
+volumes <- 1000
+
+#Fit for seeds 1:10
+get_true <- function(alpha, lambda, volumes, seed_k) {
+
+  #Sim data
+  sim_data.df <- 
+    sim_data(subjects = 20, volumes = volumes, rois = 10, alpha_tau = alpha,
+             lambda_2 = lambda, prop_true_con = 0.1, write = FALSE,
+             seed_0   = 4, seed_k = seed_k)
+  
+  #Tibble return
+  result <-
+    tibble(
+      tau_true = sim_data.df$true_params$tau_k,
+      subject  = str_c("Sub. ", 1:length(tau_true))
+    )
+  
+  #Grab true values
+  return(result)
+}
+
+#Get true taus
+true.df <-
+  tibble(
+    seed_k = 1:10,
+    tau    = map(.x = seed_k, ~get_true(alpha, lambda, volumes, .x)),
+  ) %>%
+  mutate(
+    seed_k = as.factor(seed_k)
+  ) 
+
+#Join together
+joined.df <-
+  left_join(
+    true.df %>% unnest(tau),
+    result.df %>% unnest(tau_df), 
+    by = c("seed_k", "subject")
+  ) %>%
+  group_by(seed_k) %>%
+  mutate(
+    subject = tidytext::reorder_within(subject, tau_true, seed_k, .desc = FALSE)
+  ) %>%
+  ungroup() %>%
+  pivot_longer(
+    cols = contains("tau"),
+    values_to = "value",
+    names_to  = "type" 
+  ) %>%
+  mutate(
+    type = ifelse(str_detect(type, "est"), "Est. Tau", "True Tau") %>%
+           as.factor() %>%
+          fct_relevel("True Tau"),
+    text = as.character(round(value, 0)),
+  )
+
+rep_tau_plot.gg <-
+  joined.df %>%
+  ggplot(aes(x = subject, y = value, fill = type)) +
+  geom_bar(position = "dodge", stat = "identity", width = 0.6) +
+ # geom_text(aes(label = text, colour = type), size = 4, vjust = -0.8, hjust = 0.1, position = "dodge") +
+  facet_wrap(~seed_k, scales = "free_x", ncol = 2) +
+  scale_fill_viridis_d("True vs. Est.") +
+  scale_colour_viridis_d("True vs. Est.") +
+  theme(
+   # axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+    legend.position = "top",
+    axis.text.x =element_blank(),
+    panel.background = element_rect(fill = "white", colour = "white")
+  ) +
+  labs(
+    x = "Subjects from low to high true tau",
+    y = "Value",
+    title = "Trend of true values vs. posterior estimates by subject seed"
+  )
+
+rep_tau_plot.gg
+ggsave("./testing/tau_seed_bar.png", rep_tau_plot.gg)
+
+```
+
+# $\alpha_tau$ with all else fixed    
+
+```{r alpha_fix_all, eval = FALSE, echo = FALSE}
+#Alpha lambda
+alpha <- 25
+lambda <- 0.5
+bad_start <- 1
+
+#Histogram
+(100 - truncdist::rtrunc(spec = "gamma", a = 0, b = 100,
+                  n = 1000, shape = alpha, rate = lambda)) |> hist()
+
+#Sim data
+sim_data.df <- 
+  sim_data(subjects = 20, volumes = 500, rois = 10, alpha_tau = alpha,
+           lambda_2 = lambda, prop_true_con = 0.1, write = FALSE,
+           seed_0   = 4, seed_k = 4)
+
+#Data & params
+y           <- sim_data.df$data_list
+true_params <- sim_data.df$true_params
+tau_truth   <- true_params$tau_k
+true_params$alpha_tau -> alpha_truth
+true_params$lambda_2  -> lam2_truth
+true_params$omega_0  -> omega0_truth
+true_params$omega_k  -> omegaK_truth
+
+#Set burn and iter
+priors = NULL; n_samples = 1000; n_burn = 0; n_cores = 7; n_updates = 0;
+
+  #Grab no. of subjects, rois, volumes
+  K  <- length(y)
+  p  <- ncol(y[[1]])
+  vk <- map_dbl(y, nrow)
+  Sk <- map(.x = y, ~t(.x) %*% .x)
+
+  #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
+  alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1/10, 1/10, 1/10)
+  
+  #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
+  mu_tau    <- 50 #Hyper-mean of tau_k = alpha_tau / lambda_2
+  sigma_tau <- 20 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
+  lambda_2  <- 1/2 #Fix rate lambda_2
+  alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
+  
+  #Check distributions
+  #rnorm(1000, mu_tau, sd = sigma_tau) %>% hist() #mean tau_k prior
+  #rnorm(1000, mu_tau, sd = sigma_tau * lambda_2) %>% hist() #alpha prior
+  #(100 - rgamma(1000, alpha_tau, rate = lambda_2)) %>% hist() #tau distribution
+
+  #MCMC step size/window
+  step_tau     <- rep(10, K)
+  step_alpha   <- sqrt(2)
+  step_lambda2 <- 0.05
+  
+  #How many updates during burn to adapt window/step-size
+  n_updates <- floor(n_samples / n_updates)
+
+  #Initialize estimates for Omega_k, Omega_0
+  #Omega_k - tune lambda by bic and then grab G and Omega_0
+  lambda_grid <- 10^seq(-1, 0.5, length.out = 20)
+  bic         <- vector(mode = "numeric", length = 0)
+
+  #Tune lambda for independent glasso
+  for (lam in lambda_grid) {
+    # omega_k <- ind_graphs(y, lam)
+    # bic   <- c(bic, bic_cal(y, omega_k))
+    omega_k <- ind_graphs(y, lam)
+    omega_k <- array(unlist(omega_k), dim = c(p, p, K))
+    bic     <- c(bic, bic_cal(y, omega_k))
+  }
+  
+  #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0
+  omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
+  adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
+  #omega_0 <- Reduce("+", omega_k) / K #elementwise mean
+  omega_0 <- elementwise_median(omega_k) #elementwise median, more robust to outliers
+  sigma_0 <- solve(omega_0)
+
+  #Initialize estimates for tau_k
+  tau_vec   <- vector(mode = "numeric", length = K)
+
+  #Iterate over each subject, find optimal tau_k based on posterior in 1D
+  for (k in 1:K) {
+    #print(k)
+    #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
+    f_opt <- function(tau) {
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100)
+    }
+    #Optimize in 1D
+    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+  }
+  
+  #Initialize alpha_tau from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
+  f_opt <- function(alpha_tau) {
+    -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  alpha_tau <- c(optimize(f_opt, lower = 1, upper = 50, tol = 0.01)$min)
+  
+  #Initialize lambda_2 from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
+  f_opt <- function(lambda_2) {
+    -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
+  
+  #Bad start for test
+  alpha_tau <- bad_start
+  
+  #Set up storage for results
+  #Omegas
+  omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
+  accept_k   <- vector(mode = "numeric", length = K)
+  omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
+  pct_omega_acc <- vector(mode = "integer", length = n_samples)
+  pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
+
+  #Taus, Alpha, Lambda_2
+  accept_tau     <- matrix(NA, nrow = 0, ncol = K)
+  accept_alpha   <- matrix(NA, nrow = 0, ncol = 1)
+ # accept_alpha   <- matrix(NA, nrow = 0, ncol = K)
+  accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
+  step_tau_mat   <- step_tau #Adaptive window for MH tau
+  #step_alpha_mat <- step_alpha 
+  #step_lam2_mat  <- step_lambda2
+  tau_res        <- array(NA, c(K, n_samples))
+  #mu_tau_res     <- array(NA, c(1, n_updates + 1))
+  #sigma_tau_res  <- array(NA, c(1, n_updates + 1))
+  alpha_res      <- vector(mode = "numeric", length = n_samples)
+  #alpha_res      <- array(NA, c(K, n_samples))
+  
+  #Lambdas
+  lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
+
+  #Set timer
+  timer   <- 0
+  t_start <- proc.time()
+  n_iter  <- (n_burn + n_samples)
+
+  #Loop through sampling algorithm n_samples + n_burn # times
+  for (t in 1:n_iter) {
+    #Print iteration for early testing
+    #print(paste0("Iteration: ", t))
+    
+    #Update Lambdas via direct sampling
+    #Lambda 1 sparsity-inducing penalty on G_k
+    card_k   <- (sapply(adj_k, sum) - p)/2 #Cardinality of G_k / # edges
+    lambda_1 <- rgamma(1, alpha[1] + K, rate = beta[1] + sum(card_k))
+
+    #Lambda 2 Gamma rate parameter for df/shrinkage tau_k prior
+    #lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
+    # lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
+    #                                  mu_tau, sigma_tau, window = step_lambda2)
+    # lambda_2       <- lambda_next$lambda_2
+    # accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
+    lambda_2 <- lam2_truth
+
+    #Lambda 3 Sparse L-1 penalty on group precision omega_0 prior
+    card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges or non-zero elements
+    lambda_3 <- rgamma(1, alpha[3] + card_0, beta[3] + sum(abs(omega_0))/2)
+
+    #Invert for Covariance & randomly select row_col pair
+    sigma_0 <- matinv(omega_0)
+    row_col <- sample(1:p, 1)
+    
+    #Pass back to omega_k
+    omega_k  <- omegaK_truth
+    #omega_k <- omega_k_update
+    
+
+    #Tau_k update
+    # tau_k <-
+    #   map(
+    #     .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
+    #     ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x])
+    #   ) #Return list object
+    # for (k in 1:K) {
+    #   print(paste0("sub: ", k))
+    #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
+    # }
+    #accept_tau <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
+    #tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
+    tau_vec <- tau_truth
+
+    #Adaptive tau step-size/window for MH proposal
+     if (t %% n_updates == 0 & t <= n_burn) {
+        #Compute acceptance rate (colwise mean)
+        accept_rate <- apply(accept_tau, 2, mean)
+        #For each subject, adjust tau_k proposal (lognormal) step size
+         for (k in 1:K) {
+           if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
+            step_tau[k] <- min(20, step_tau[k] + 1)
+           } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
+             step_tau[k] <- max(1, step_tau[k] - 1)
+            }
+         }
+         step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
+         accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
+     }
+    
+    #Old alpha update
+    alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
+    alpha_tau    <- alpha_next$alpha_tau
+    accept_alpha <- rbind(accept_alpha, alpha_next$accept)
+    #alpha_tau <- alpha_truth
+    
+    
+
+    #Update Omega_0 via Wang and Li (2012) + step-proposal distribution
+    # D       <- apply(mapply('*', omega_k, tau_vec, SIMPLIFY = 'array'), 1:2, sum)
+    # omega_0 <- omega0_update(omega_0, D, sum(tau_vec), lambda_3)
+    # pct_accept <- omega_0$pct_accept #Off-diagonal acceptance%
+    # omega_0 <- omega_0$omega #Precision matrix itself
+    omega_0 <- omega0_truth
+
+    #Save those results after burn-in
+    if(t > n_burn) {
+      t_burn <- t - n_burn
+    #  omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
+    #  omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
+     # tau_res[, t_burn]      <- tau_vec
+      alpha_res[t_burn]      <- alpha_tau
+    #  lambda_res[, t_burn]   <- c(lambda_1, lambda_2, lambda_3)
+     # pct_omega_acc[t_burn]  <- pct_accept
+    #  pct_k_acc[t_burn, ]    <- accept_k
+    }
+
+    #Track temporal progress (every 20% progress update)
+    if (t %% floor(0.2 * (n_samples + n_burn))) {
+      t_now   <- proc.time()
+      timer   <- c(timer, (t_now - t_start)[3])
+      t_start <- t_now
+    }
+  }
+
+  #Result list of results
+  result <-
+    list(
+     # omega_0    = omega0_res,
+    #  omega_k    = omegas_res,
+    #  omega_acc  = pct_omega_acc,
+      # tau_k       = tau_res,
+      # tau_acc     = accept_tau,
+      # tau_step    = step_tau_mat,
+     alpha_tau   = alpha_res,
+     alpha_acc   = accept_alpha,
+     alpha_step  = step_alpha,
+    #  lambdas     = lambda_res, 
+    #  lambda_acc  = accept_lambda2,
+    #  lambda_step = step_lam2_mat,
+      timer       = timer
+    )
+
+#write out
+#write_rds(result, "./testing/tau_k_fixed_all.rds")
+```
+
+## $\alpha_tau$ diagnostics  
+
+```{r eval = FALSE, echo = FALSE}
+#Diagnostics
+#Alpha_tau
+alpha_tau.gg <-
+  tibble(
+    alpha_tau = result$alpha_tau,
+    iteration = 1:n_iter
+  ) %>%
+  ggplot(aes(x = iteration, y = alpha_tau)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(yintercept = alpha_truth, colour = "red", linetype = 2) +
+ # facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  scale_y_continuous(limits = c(0, 50)) +
+  #scale_y_continuous(limits = c(0, bad_start)) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Alpha tau",
+    title = "Alpha Chain with Fixed G_k/Omega_k and Omega_0"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+#alpha acceptance
+result$alpha_acc %>% 
+  apply(., 2, mean) %>%
+  scales::percent()
+```
+
+```{r eval = FALSE, echo = FALSE}
+#How far from truth
+mean(result$alpha_tau) - alpha_truth
+median(result$alpha_tau) - alpha_truth
+
+#Plot MCMC chain diagnostic
+alpha_tau.gg
+ggplot() + geom_line(aes(y = cumsum(result$alpha_acc), x = 1:length(result$alpha_acc)))
+
+#Estimated posterior 100 - tau
+(100 - truncdist::rtrunc(
+    spec = "gamma", a = 0, b = 100, n = 1000, 
+    shape = median(result$alpha_tau), rate = lam2_truth
+    )) %>% hist()
+
+#True 100-tau
+(100 - truncdist::rtrunc(
+    spec = "gamma", a = 0, b = 100, n = 1000, 
+    shape = alpha_truth, rate = lam2_truth
+    )) %>% hist()
+```
+
+# $\lambda_2$ with all else fixed 
+
+```{r lambda_fix_all, eval = FALSE, echo = FALSE}
+#Set burn and iter
+priors = NULL; n_samples = 1000; n_burn = 0; n_cores = 7; n_updates = 0;
+
+  #Grab no. of subjects, rois, volumes
+  K  <- length(y)
+  p  <- ncol(y[[1]])
+  vk <- map_dbl(y, nrow)
+  Sk <- map(.x = y, ~t(.x) %*% .x)
+
+  #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
+  alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1/2, 1/2, 1/10)
+  
+  #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
+  mu_tau    <- 50 #Hyper-mean of tau_k = alpha_tau / lambda_2
+  sigma_tau <- 20 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
+  lambda_2  <- 1 #Fix rate lambda_2
+  alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
+  
+  #Check distributions
+  #rnorm(1000, mu_tau, sd = sigma_tau) %>% hist() #mean tau_k prior
+  #rnorm(1000, mu_tau, sd = sigma_tau * lambda_2) %>% hist() #alpha prior
+  #(100 - rgamma(1000, alpha_tau, rate = lambda_2)) %>% hist() #tau distribution
+
+  #MCMC step size/window
+  step_tau     <- rep(10, K)
+  step_alpha   <- sqrt(2)
+  step_lambda2 <- 0.04
+  
+  #How many updates during burn to adapt window/step-size
+  n_updates <- floor(n_samples / n_updates)
+
+  #Initialize estimates for Omega_k, Omega_0
+  #Omega_k - tune lambda by bic and then grab G and Omega_0
+  lambda_grid <- 10^seq(-1, 0.5, length.out = 20)
+  bic         <- vector(mode = "numeric", length = 0)
+
+  #Tune lambda for independent glasso
+  for (lam in lambda_grid) {
+    # omega_k <- ind_graphs(y, lam)
+    # bic   <- c(bic, bic_cal(y, omega_k))
+    omega_k <- ind_graphs(y, lam)
+    omega_k <- array(unlist(omega_k), dim = c(p, p, K))
+    bic     <- c(bic, bic_cal(y, omega_k))
+  }
+  
+  #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0
+  omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
+  adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
+  #omega_0 <- Reduce("+", omega_k) / K #elementwise mean
+  omega_0 <- elementwise_median(omega_k) #elementwise median, more robust to outliers
+  sigma_0 <- solve(omega_0)
+
+  #Initialize estimates for tau_k
+  tau_vec   <- vector(mode = "numeric", length = K)
+
+  #Iterate over each subject, find optimal tau_k based on posterior in 1D
+  for (k in 1:K) {
+    #print(k)
+    #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
+    f_opt <- function(tau) {
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100)
+    }
+    #Optimize in 1D
+    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+  }
+  
+  #Initialize alpha_tau from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
+  f_opt <- function(alpha_tau) {
+    -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  alpha_tau <- c(optimize(f_opt, lower = 1, upper = 50, tol = 0.01)$min)
+  
+  #Initialize lambda_2 from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
+  f_opt <- function(lambda_2) {
+    -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
+  lambda_2 <- 10 # Test bad starting value
+  
+  #Set up storage for results
+  #Omegas
+  omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
+  accept_k   <- vector(mode = "numeric", length = K)
+  omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
+  pct_omega_acc <- vector(mode = "integer", length = n_samples)
+  pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
+
+  #Taus, Alpha, Lambda_2
+  accept_tau     <- matrix(NA, nrow = 0, ncol = K)
+  accept_alpha   <- matrix(NA, nrow = 0, ncol = 1)
+ # accept_alpha   <- matrix(NA, nrow = 0, ncol = K)
+  accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
+  step_tau_mat   <- step_tau #Adaptive window for MH tau
+  #step_alpha_mat <- step_alpha 
+  #step_lam2_mat  <- step_lambda2
+  tau_res        <- array(NA, c(K, n_samples))
+  #mu_tau_res     <- array(NA, c(1, n_updates + 1))
+  #sigma_tau_res  <- array(NA, c(1, n_updates + 1))
+  alpha_res      <- vector(mode = "numeric", length = n_samples)
+  #alpha_res      <- array(NA, c(K, n_samples))
+  
+  #Lambdas
+  lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
+
+  #Set timer
+  timer   <- 0
+  t_start <- proc.time()
+  n_iter  <- (n_burn + n_samples)
+
+  #Loop through sampling algorithm n_samples + n_burn # times
+  for (t in 1:n_iter) {
+    #Print iteration for early testing
+    #print(paste0("Iteration: ", t))
+    
+    #Update Lambdas via direct sampling
+    #Lambda 1 sparsity-inducing penalty on G_k
+    card_k   <- (sapply(adj_k, sum) - p)/2 #Cardinality of G_k / # edges
+    lambda_1 <- rgamma(1, alpha[1] + K, rate = beta[1] + sum(card_k))
+
+    #Lambda 2 Gamma rate parameter for df/shrinkage tau_k prior
+    #lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
+    lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
+                                     mu_tau, sigma_tau, window = step_lambda2)
+    lambda_2       <- lambda_next$lambda_2
+    accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
+    #lambda_2 <- lam2_truth
+
+    #Lambda 3 Sparse L-1 penalty on group precision omega_0 prior
+    card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges or non-zero elements
+    lambda_3 <- rgamma(1, alpha[3] + card_0, beta[3] + sum(abs(omega_0))/2)
+
+    #Invert for Covariance & randomly select row_col pair
+    sigma_0 <- matinv(omega_0)
+    row_col <- sample(1:p, 1)
+    
+    #Pass back to omega_k
+    omega_k  <- omegaK_truth
+    #omega_k <- omega_k_update
+    
+
+    #Tau_k update
+    # tau_k <-
+    #   map(
+    #     .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
+    #     ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x])
+    #   ) #Return list object
+    # for (k in 1:K) {
+    #   print(paste0("sub: ", k))
+    #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
+    # }
+    #accept_tau <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
+    #tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
+    tau_vec <- tau_truth
+
+    #Adaptive tau step-size/window for MH proposal
+     if (t %% n_updates == 0 & t <= n_burn) {
+        #Compute acceptance rate (colwise mean)
+        accept_rate <- apply(accept_tau, 2, mean)
+        #For each subject, adjust tau_k proposal (lognormal) step size
+         for (k in 1:K) {
+           if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
+            step_tau[k] <- min(20, step_tau[k] + 1)
+           } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
+             step_tau[k] <- max(1, step_tau[k] - 1)
+            }
+         }
+         step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
+         accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
+     }
+    
+    #Old alpha update
+    # alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
+    # alpha_tau    <- alpha_next$alpha_tau
+    # accept_alpha <- rbind(accept_alpha, alpha_next$accept)
+    alpha_tau <- alpha_truth
+    
+    
+
+    #Update Omega_0 via Wang and Li (2012) + step-proposal distribution
+    # D       <- apply(mapply('*', omega_k, tau_vec, SIMPLIFY = 'array'), 1:2, sum)
+    # omega_0 <- omega0_update(omega_0, D, sum(tau_vec), lambda_3)
+    # pct_accept <- omega_0$pct_accept #Off-diagonal acceptance%
+    # omega_0 <- omega_0$omega #Precision matrix itself
+    omega_0 <- omega0_truth
+
+    #Save those results after burn-in
+    if(t > n_burn) {
+      t_burn <- t - n_burn
+    #  omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
+    #  omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
+     # tau_res[, t_burn]      <- tau_vec
+    #  alpha_res[t_burn]      <- alpha_tau
+      lambda_res[, t_burn]   <- c(lambda_1, lambda_2, lambda_3)
+     # pct_omega_acc[t_burn]  <- pct_accept
+    #  pct_k_acc[t_burn, ]    <- accept_k
+    }
+
+    #Track temporal progress (every 20% progress update)
+    if (t %% floor(0.2 * (n_samples + n_burn))) {
+      t_now   <- proc.time()
+      timer   <- c(timer, (t_now - t_start)[3])
+      t_start <- t_now
+    }
+  }
+
+  #Result list of results
+  result <-
+    list(
+     # omega_0    = omega0_res,
+    #  omega_k    = omegas_res,
+    #  omega_acc  = pct_omega_acc,
+      # tau_k       = tau_res,
+      # tau_acc     = accept_tau,
+      # tau_step    = step_tau_mat,
+     # alpha_tau   = alpha_res,
+     # alpha_acc   = accept_alpha,
+     # alpha_step  = step_alpha,
+     lambdas     = lambda_res,
+     lambda_acc  = accept_lambda2,
+    # lambda_step = step_lam2_mat,
+      timer       = timer
+    )
+
+#write out
+#write_rds(result, "./testing/tau_k_fixed_all.rds")
+```
+
+
+## $\lambda_2$ diagnostics  
+
+```{r eval = FALSE, echo = FALSE}
+#Diagnostics
+#Lambda
+lambda_2.gg <-
+  tibble(
+    lambda_2  = result$lambdas[2,],
+    iteration = 1:n_iter
+  ) %>%
+  ggplot(aes(x = iteration, y = lambda_2)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(yintercept = lam2_truth, colour = "red", linetype = 2) +
+ # facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  scale_y_continuous(limits = c(0, 10)) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Lambda 2",
+    title = "Lambda Chain with Fixed G_k/Omega_k and Omega_0"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+#lambda acceptance
+result$lambda_acc %>% 
+  apply(., 2, mean) %>%
+  scales::percent()
+```
+
+```{r eval = FALSE, echo = FALSE}
+mean(result$lambdas[2,]) - lam2_truth
+median(result$lambdas[2,]) - lam2_truth
+
+lambda_2.gg
+ggplot() + geom_line(aes(y = cumsum(result$lambda_acc), x = 1:length(result$lambda_acc)))
+```
+
+
+
+
+
+
+# $\alpha_tau$ and $\lambda_2$ with all else fixed  
+
+## Both $\alpha$ and $\lambda$ free for posterior sampling  
+
+```{r alpha_lambda_fix_all, eval = FALSE, echo = FALSE}
+#Set burn and iter
+priors = NULL; n_samples = 4000; n_burn = 0; n_cores = 7; n_updates = 0;
+
+  #Grab no. of subjects, rois, volumes
+  K  <- length(y)
+  p  <- ncol(y[[1]])
+  vk <- map_dbl(y, nrow)
+  Sk <- map(.x = y, ~t(.x) %*% .x)
+
+  #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
+  alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1/10, 1/10, 1/10)
+  
+  #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
+  mu_tau    <- 50 #Hyper-prior mean of tau_k = alpha_tau / lambda_2
+  sigma_tau <- 3 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
+  lambda_2  <- 0.75 #Fix rate lambda_2
+  alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
+  
+  #Check distributions
+  #rnorm(1000, mu_tau, sd = sigma_tau) %>% hist() #mean tau_k prior
+  #rnorm(1000, mu_tau, sd = sigma_tau * lambda_2) %>% hist() #alpha prior
+  #(100 - rgamma(1000, alpha_tau, rate = lambda_2)) %>% hist() #tau distribution
+
+  #MCMC step size/window
+  step_tau     <- rep(10, K)
+  step_alpha   <- sqrt(2)
+  step_lambda2 <- 0.12
+  
+  #How many updates during burn to adapt window/step-size
+  n_updates <- floor(n_samples / n_updates)
+
+  #Initialize estimates for Omega_k, Omega_0
+  #Omega_k - tune lambda by bic and then grab G and Omega_0
+  lambda_grid <- 10^seq(-1, 0.5, length.out = 20)
+  bic         <- vector(mode = "numeric", length = 0)
+
+  #Tune lambda for independent glasso
+  for (lam in lambda_grid) {
+    # omega_k <- ind_graphs(y, lam)
+    # bic   <- c(bic, bic_cal(y, omega_k))
+    omega_k <- ind_graphs(y, lam)
+    omega_k <- array(unlist(omega_k), dim = c(p, p, K))
+    bic     <- c(bic, bic_cal(y, omega_k))
+  }
+  
+  #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0
+  omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
+  adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
+  #omega_0 <- Reduce("+", omega_k) / K #elementwise mean
+  omega_0 <- elementwise_median(omega_k) #elementwise median, more robust to outliers
+  sigma_0 <- solve(omega_0)
+
+  #Initialize estimates for tau_k
+  tau_vec   <- vector(mode = "numeric", length = K)
+
+  #Iterate over each subject, find optimal tau_k based on posterior in 1D
+  for (k in 1:K) {
+    #print(k)
+    #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
+    f_opt <- function(tau) {
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100)
+    }
+    #Optimize in 1D
+    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+  }
+  
+  #Initialize alpha_tau from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
+  f_opt <- function(alpha_tau) {
+    -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  alpha_tau <- c(optimize(f_opt, lower = 1, upper = 50, tol = 0.01)$min)
+  
+  #Or ebayes
+   # lambda_2  <- mean(tau_vec) / sd(tau_vec)^2
+   # alpha_tau <- mean(tau_vec) * lambda_2 
+
+  #mu_tau    <- mean(tau_vec)
+  #sigma_tau  <- sd(tau_vec)
+  
+  #Initialize lambda_2 from tau_vec
+  #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
+  f_opt <- function(lambda_2) {
+    -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  }
+  #Optimize in 1D
+  lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
+
+  #Set up storage for results
+  #Omegas
+  omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
+  accept_k   <- vector(mode = "numeric", length = K)
+  omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
+  pct_omega_acc <- vector(mode = "integer", length = n_samples)
+  pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
+
+  #Taus, Alpha, Lambda_2
+  accept_tau     <- matrix(NA, nrow = 0, ncol = K)
+  accept_alpha   <- matrix(NA, nrow = 0, ncol = 1)
+ # accept_alpha   <- matrix(NA, nrow = 0, ncol = K)
+  accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
+  step_tau_mat   <- step_tau #Adaptive window for MH tau
+  #step_alpha_mat <- step_alpha 
+  #step_lam2_mat  <- step_lambda2
+  tau_res        <- array(NA, c(K, n_samples))
+  #mu_tau_res     <- array(NA, c(1, n_updates + 1))
+  #sigma_tau_res  <- array(NA, c(1, n_updates + 1))
+  alpha_res      <- vector(mode = "numeric", length = n_samples)
+  #alpha_res      <- array(NA, c(K, n_samples))
+  
+  #Lambdas
+  lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
+
+  #Set timer
+  timer   <- 0
+  t_start <- proc.time()
+  n_iter  <- (n_burn + n_samples)
+
+  #Loop through sampling algorithm n_samples + n_burn # times
+  for (t in 1:n_iter) {
+    #Print iteration for early testing
+    #print(paste0("Iteration: ", t))
+    
+    #Update Lambdas via direct sampling
+    #Lambda 1 sparsity-inducing penalty on G_k
+    card_k   <- (sapply(adj_k, sum) - p)/2 #Cardinality of G_k / # edges
+    lambda_1 <- rgamma(1, alpha[1] + K, rate = beta[1] + sum(card_k))
+
+    #Lambda 2 Gamma rate parameter for df/shrinkage tau_k prior
+    #lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
+    lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
+                                     mu_tau, sigma_tau, window = step_lambda2)
+    lambda_2       <- lambda_next$lambda_2
+    accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
+    #lambda_2 <- lam2_truth
+
+    #Lambda 3 Sparse L-1 penalty on group precision omega_0 prior
+    card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges or non-zero elements
+    lambda_3 <- rgamma(1, alpha[3] + card_0, beta[3] + sum(abs(omega_0))/2)
+
+    #Invert for Covariance & randomly select row_col pair
+    sigma_0 <- matinv(omega_0)
+    row_col <- sample(1:p, 1)
+    
+    #Pass back to omega_k
+    omega_k  <- omegaK_truth
+    #omega_k <- omega_k_update
+    
+
+    #Tau_k update
+    # tau_k <-
+    #   map(
+    #     .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
+    #     ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x])
+    #   ) #Return list object
+    # for (k in 1:K) {
+    #   print(paste0("sub: ", k))
+    #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
+    # }
+    #accept_tau <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
+    #tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
+    tau_vec <- tau_truth
+
+    # #Adaptive tau step-size/window for MH proposal
+    #  if (t %% n_updates == 0 & t <= n_burn) {
+    #     #Compute acceptance rate (colwise mean)
+    #     accept_rate <- apply(accept_tau, 2, mean)
+    #     #For each subject, adjust tau_k proposal (lognormal) step size
+    #      for (k in 1:K) {
+    #        if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
+    #         step_tau[k] <- min(20, step_tau[k] + 1)
+    #        } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
+    #          step_tau[k] <- max(1, step_tau[k] - 1)
+    #         }
+    #      }
+    #      step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
+    #      accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
+    #  }
+    # 
+    #Old alpha update
+    alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
+    alpha_tau    <- alpha_next$alpha_tau
+    accept_alpha <- rbind(accept_alpha, alpha_next$accept)
+    #alpha_tau <- alpha_truth
+    
+    
+
+    #Update Omega_0 via Wang and Li (2012) + step-proposal distribution
+    # D       <- apply(mapply('*', omega_k, tau_vec, SIMPLIFY = 'array'), 1:2, sum)
+    # omega_0 <- omega0_update(omega_0, D, sum(tau_vec), lambda_3)
+    # pct_accept <- omega_0$pct_accept #Off-diagonal acceptance%
+    # omega_0 <- omega_0$omega #Precision matrix itself
+    omega_0 <- omega0_truth
+
+    #Save those results after burn-in
+    if(t > n_burn) {
+      t_burn <- t - n_burn
+    #  omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
+    #  omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
+     # tau_res[, t_burn]      <- tau_vec
+      alpha_res[t_burn]      <- alpha_tau
+      lambda_res[, t_burn]   <- c(lambda_1, lambda_2, lambda_3)
+     # pct_omega_acc[t_burn]  <- pct_accept
+    #  pct_k_acc[t_burn, ]    <- accept_k
+    }
+
+    #Track temporal progress (every 20% progress update)
+    if (t %% floor(0.2 * (n_samples + n_burn))) {
+      t_now   <- proc.time()
+      timer   <- c(timer, (t_now - t_start)[3])
+      t_start <- t_now
+    }
+  }
+
+  #Result list of results
+  result <-
+    list(
+     # omega_0    = omega0_res,
+    #  omega_k    = omegas_res,
+    #  omega_acc  = pct_omega_acc,
+      # tau_k       = tau_res,
+      # tau_acc     = accept_tau,
+      # tau_step    = step_tau_mat,
+     alpha_tau   = alpha_res,
+     alpha_acc   = accept_alpha,
+     # alpha_step  = step_alpha,
+     lambdas     = lambda_res,
+     lambda_acc  = accept_lambda2,
+    # lambda_step = step_lam2_mat,
+      timer       = timer
+    )
+
+#write out
+#write_rds(result, "./testing/tau_k_fixed_all.rds")
+```
+
+### $\alpha_tau$ diagnostics  
+
+```{r eval = FALSE, echo = FALSE}
+#Diagnostics
+#Alpha_tau
+alpha_tau.gg <-
+  tibble(
+    alpha_tau = result$alpha_tau,
+    iteration = 1:n_iter
+  ) %>%
+  ggplot(aes(x = iteration, y = alpha_tau)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(yintercept = alpha_truth, colour = "red", linetype = 2) +
+ # facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Alpha tau",
+    title = "Alpha Chain with Fixed G_k/Omega_k and Omega_0"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+#alpha acceptance
+result$alpha_acc %>% 
+  apply(., 2, mean) %>%
+  scales::percent()
+```
+
+```{r eval = FALSE, echo = FALSE}
+#How far from truth
+mean(result$alpha_tau) - alpha_truth
+median(result$alpha_tau) - alpha_truth
+
+#Plot MCMC chain diagnostic
+alpha_tau.gg
+ggplot() + geom_line(aes(y = cumsum(result$alpha_acc), x = 1:length(result$alpha_acc)))
+
+#Estimated posterior 100 - tau
+(100 - truncdist::rtrunc(
+    spec = "gamma", a = 0, b = 100, n = 1000, 
+    shape = median(result$alpha_tau), rate = median(result$lambdas[,2])
+    )) %>% hist()
+
+#True 100-tau
+(100 - truncdist::rtrunc(
+    spec = "gamma", a = 0, b = 100, n = 1000, 
+    shape = alpha_truth, rate = lam2_truth
+    )) %>% hist()
+
+#Estimated posterior 100 - tau
+(100 - truncdist::rtrunc(
+    spec = "gamma", a = 0, b = 100, n = 1000, 
+    shape = median(result$alpha_tau), rate = median(result$lambdas[,2])
+    )) %>% hist()
+```
+
+### $\lambda_2$ diagnostics  
+
+```{r eval = FALSE, echo = FALSE}
+#Diagnostics
+#Lambda
+lambda_2.gg <-
+  tibble(
+    lambda_2  = result$lambdas[2,],
+    iteration = 1:n_iter
+  ) %>%
+  ggplot(aes(x = iteration, y = lambda_2)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(yintercept = lam2_truth, colour = "red", linetype = 2) +
+ # facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Lambda 2",
+    title = "Lambda Chain with Fixed G_k/Omega_k and Omega_0"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+#lambda acceptance
+result$lambda_acc %>% 
+  apply(., 2, mean) %>%
+  scales::percent()
+```
+
+```{r eval = FALSE, echo = FALSE}
+mean(result$lambdas[2,]) - lam2_truth
+median(result$lambdas[2,]) - lam2_truth
+
+lambda_2.gg
+ggplot() + geom_line(aes(y = cumsum(result$lambda_acc), x = 1:length(result$lambda_acc)))
+```
+
+
+## $\alpha$ E-bayes and $\lambda$ free for posterior sampling  
+
+```{r alpha_ebayes_fix_all, eval = FALSE, echo = FALSE}
+#Set burn and iter
+priors = NULL; n_samples = 1000; n_burn = 1000; n_cores = 7; n_updates = 10; trunc = c(0, 100);
+
+  #Grab no. of subjects, rois, volumes
+  K  <- length(y)
+  p  <- ncol(y[[1]])
+  vk <- map_dbl(y, nrow)
+  Sk <- map(.x = y, ~t(.x) %*% .x)
+
+  #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
+  alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1/10, 1/10, 1/10)
+  
+  #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
+  mu_tau    <- 50 #Hyper-mean of tau_k = alpha_tau / lambda_2
+  sigma_tau <- 4 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
+  lambda_2  <- 1/3 #Fix rate lambda_2
+  alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
+  
+  #Check distributions
+  #rnorm(1000, mu_tau, sd = sigma_tau) %>% hist() #mean tau_k prior
+  #rnorm(1000, mu_tau, sd = sigma_tau * lambda_2) %>% hist() #alpha prior
+  #(100 - rgamma(1000, alpha_tau, rate = lambda_2)) %>% hist() #tau distribution
+
+  #MCMC step size/window
+  step_tau     <- rep(12, K)
+  step_alpha   <- 1
+  step_lambda2 <- 0.05
+  
+  #How many updates during burn to adapt window/step-size
+  n_updates <- floor(n_samples / n_updates)
+
+  #Initialize estimates for Omega_k, Omega_0
+  #Omega_k - tune lambda by bic and then grab G and Omega_0
+  lambda_grid <- 10^seq(-1, 0.5, length.out = 20)
+  bic         <- vector(mode = "numeric", length = 0)
+
+  #Tune lambda for independent glasso
+  for (lam in lambda_grid) {
+    # omega_k <- ind_graphs(y, lam)
+    # bic   <- c(bic, bic_cal(y, omega_k))
+    omega_k <- ind_graphs(y, lam)
+    omega_k <- array(unlist(omega_k), dim = c(p, p, K))
+    bic     <- c(bic, bic_cal(y, omega_k))
+  }
+  
+  #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0
+  omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
+  adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
+  #omega_0 <- Reduce("+", omega_k) / K #elementwise mean
+  omega_0 <- elementwise_median(omega_k) #elementwise median, more robust to outliers
+  sigma_0 <- solve(omega_0)
+
+  #Initialize estimates for tau_k
+  tau_vec   <- vector(mode = "numeric", length = K)
+
+  #Iterate over each subject, find optimal tau_k based on posterior in 1D
+  for (k in 1:K) {
+    #print(k)
+    #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
+    f_opt <- function(tau) {
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100)
+    }
+    #Optimize in 1D
+    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+  }
+  
+  # E-bayes
+  # mu_tau    <- 100 - mean(tau_vec)
+  # sigma_tau <- sd(tau_vec)
+  # 
+  # #Initialize alpha_tau from tau_vec
+  # #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
+  # f_opt <- function(alpha_tau) {
+  #   -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  # }
+  # #Optimize in 1D
+  # alpha_tau <- c(optimize(f_opt, lower = 1, upper = 50, tol = 0.01)$min)
+  # 
+  # #Initialize lambda_2 from tau_vec
+  # #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
+  # f_opt <- function(lambda_2) {
+  #   -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  # }
+  # #Optimize in 1D
+  # lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
+  # 
+  #   #E-bayes for alpha given above via mean of trunc gamma
+  # alpha_tau <-
+  #   lambda_2 * mean(tau_vec) /
+  #   (1 - dgamma(100, alpha_tau, rate = lambda_2) / pgamma(100, alpha_tau, rate = lambda_2))
+  
+  #Grid search across alpha_tau and optimize lambda_2
+  mean_search <- 1:99
+  
+  #tau | alpha, \lambda ~ trunc gamma optimize w.r.t. lambda given tau_hat, alpha
+  alpha_lam_opt <- function(mean) {
+      f_opt <- function(lambda_2) {
+    sum(
+      map_dbl(
+        .x = tau_vec,
+        ~log(truncdist::dtrunc(spec = "gamma",
+                           a = trunc[1],
+                           b = trunc[2],
+                           x = 100 - .x,
+                           shape = mean * lambda_2,
+                           rate  = lambda_2))
+      )
+    )
+      }
+      #asdf
+      return(as.data.frame(optimize(f_opt, lower = 0, upper = 10, tol = 0.01, maximum = TRUE)))
+  }
+
+#Result
+alpha_res.df <-
+  tibble(
+    mean   = mean_search,
+    result = map(.x = mean, ~alpha_lam_opt(.x)) 
+  ) %>%
+  unnest(result) %>%
+  rename(lambda = maximum) %>%
+  mutate(
+    diff = c(NA, diff(objective, lag = 1)), #Stop when diff < 1 in objective function?
+    sample = map2(.x = mean,
+                 .y = lambda,
+                  ~(100 - truncdist::rtrunc(spec = "gamma",
+                           a = trunc[1],
+                           b = trunc[2],
+                           n = 1000,
+                           shape = .x * .y,
+                           rate  = .y))),
+    mean_samp = map_dbl(.x = sample, ~mean(.x)),
+    sd_samp   = map_dbl(.x = sample, ~sd(.x)),
+    sample = map(.x = sample, ~tibble(sample = .x)),
+    hist = map(.x = sample, ~ggplot(.x, aes(x = sample)) + geom_histogram(binwidth = 5))
+  ) 
+
+  #Select alpha, lambda pair
+  opt.df <-
+  alpha_res.df %>%
+    filter(objective == max(objective))
+
+  #Non-truncated gamma
+  alpha_tau <-
+    opt.df %>%
+    mutate(alpha = mean * lambda) %>%
+    pull(alpha)
+
+  #Starting value for lam2
+  lambda_2 <-
+    opt.df %>%
+    pull(lambda)
+
+  #E-bayes for alpha_tau
+  alpha_tau <-
+    lambda_2 * mean(tau_vec) /
+    (1 - dgamma(100, alpha_tau, rate = lambda_2) / pgamma(100, alpha_tau, rate = lambda_2))
+  
+  #Set up storage for results
+  #Omegas
+  omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
+  accept_k   <- vector(mode = "numeric", length = K)
+  omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
+  pct_omega_acc <- vector(mode = "integer", length = n_samples)
+  pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
+
+  #Taus, Alpha, Lambda_2
+  accept_tau     <- matrix(NA, nrow = 0, ncol = K)
+  accept_alpha   <- matrix(NA, nrow = 0, ncol = 1)
+ # accept_alpha   <- matrix(NA, nrow = 0, ncol = K)
+  accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
+  step_tau_mat   <- step_tau #Adaptive window for MH tau
+  #step_alpha_mat <- step_alpha 
+  #step_lam2_mat  <- step_lambda2
+  tau_res        <- array(NA, c(K, n_samples))
+  #mu_tau_res     <- array(NA, c(1, n_updates + 1))
+  #sigma_tau_res  <- array(NA, c(1, n_updates + 1))
+  #alpha_res      <- vector(mode = "numeric", length = n_samples)
+  alpha_res      <- alpha_tau
+  #alpha_res      <- array(NA, c(K, n_samples))
+  
+  #Lambdas
+  lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
+
+  #Set timer
+  timer   <- 0
+  t_start <- proc.time()
+  n_iter  <- (n_burn + n_samples)
+
+  #Loop through sampling algorithm n_samples + n_burn # times
+  for (t in 1:n_iter) {
+    #Print iteration for early testing
+    #print(paste0("Iteration: ", t))
+    
+    #Update Lambdas via direct sampling
+    #Lambda 1 sparsity-inducing penalty on G_k
+    card_k   <- (sapply(adj_k, sum) - p)/2 #Cardinality of G_k / # edges
+    lambda_1 <- rgamma(1, alpha[1] + K, rate = beta[1] + sum(card_k))
+
+    #Lambda 2 Gamma rate parameter for df/shrinkage tau_k prior
+    #lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
+    lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
+                                     mu_tau, sigma_tau, window = step_lambda2, ebayes = TRUE)
+    lambda_2       <- lambda_next$lambda_2
+    accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
+    #lambda_2 <- lam2_truth
+
+    #Lambda 3 Sparse L-1 penalty on group precision omega_0 prior
+    card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges or non-zero elements
+    lambda_3 <- rgamma(1, alpha[3] + card_0, beta[3] + sum(abs(omega_0))/2)
+
+    #Invert for Covariance & randomly select row_col pair
+    sigma_0 <- matinv(omega_0)
+    row_col <- sample(1:p, 1)
+    
+    #Pass back to omega_k
+    omega_k  <- omegaK_truth
+    #omega_k <- omega_k_update
+    
+
+    #Tau_k update
+    tau_k <-
+      map(
+        .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
+        ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x])
+      ) #Return list object
+    # for (k in 1:K) {
+    #   #print(paste0("sub: ", k))
+    #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
+    # }
+    accept_tau <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
+    tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
+    #tau_vec <- tau_truth
+
+    #Adaptive tau step-size/window for MH proposal
+     if (t %% n_updates == 0 & t <= n_burn) {
+        #Compute acceptance rate (colwise mean)
+        accept_rate <- apply(accept_tau, 2, mean)
+        #For each subject, adjust tau_k proposal (lognormal) step size
+         for (k in 1:K) {
+           if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
+            step_tau[k] <- min(20, step_tau[k] + 0.5)
+           } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
+             step_tau[k] <- max(1, step_tau[k] - 0.5)
+            }
+         }
+         step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
+         accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
+     }
+    # 
+    # #Old alpha update
+    # alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
+    # alpha_tau    <- alpha_next$alpha_tau
+    # accept_alpha <- rbind(accept_alpha, alpha_next$accept)
+    alpha_tau <- alpha_tau
+    
+    
+
+    #Update Omega_0 via Wang and Li (2012) + step-proposal distribution
+    # D       <- apply(mapply('*', omega_k, tau_vec, SIMPLIFY = 'array'), 1:2, sum)
+    # omega_0 <- omega0_update(omega_0, D, sum(tau_vec), lambda_3)
+    # pct_accept <- omega_0$pct_accept #Off-diagonal acceptance%
+    # omega_0 <- omega_0$omega #Precision matrix itself
+    omega_0 <- omega0_truth
+
+    #Save those results after burn-in
+    if(t > n_burn) {
+      t_burn <- t - n_burn
+    #  omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
+    #  omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
+      tau_res[, t_burn]      <- tau_vec
+      alpha_res[t_burn]      <- alpha_tau
+      lambda_res[, t_burn]   <- c(lambda_1, lambda_2, lambda_3)
+     # pct_omega_acc[t_burn]  <- pct_accept
+    #  pct_k_acc[t_burn, ]    <- accept_k
+    }
+
+    #Track temporal progress (every 20% progress update)
+    if (t %% floor(0.2 * (n_samples + n_burn))) {
+      t_now   <- proc.time()
+      timer   <- c(timer, (t_now - t_start)[3])
+      t_start <- t_now
+    }
+  }
+
+  #Result list of results
+  result <-
+    list(
+     # omega_0    = omega0_res,
+    #  omega_k    = omegas_res,
+    #  omega_acc  = pct_omega_acc,
+      tau_k       = tau_res,
+      tau_acc     = accept_tau,
+      tau_step    = step_tau_mat,
+   #  alpha_tau   = alpha_res,
+  #   alpha_acc   = accept_alpha,
+     # alpha_step  = step_alpha,
+     lambdas     = lambda_res,
+     lambda_acc  = accept_lambda2,
+    # lambda_step = step_lam2_mat,
+      timer       = timer
+    )
+
+#write out
+#write_rds(result, "./testing/tau_k_fixed_all.rds")
+```
+
+### $\tau_k$ diagnostics
+
+```{r eval = FALSE, echo = FALSE}
+#Read in result to display diagnostics
+#result <- read_rds("./testing/tau_k_fixed_all.rds")
+n_iter <- ncol(result$tau_k)
+k <- nrow(result$tau_k)
+set.seed(4)
+
+#Truth data frame for plotting
+tau_true.df <- 
+  tibble(
+    tau = str_c("Sub. ", 1:k),
+    true_value = tau_truth
+  )
+
+#Diagnostics
+#Tauk
+tauk.gg <-
+  t(result$tau_k) %>%
+  as.data.frame() %>%
+  mutate(
+    iteration = 1:nrow(.)
+  ) %>%
+  rename_with(
+    .cols = -iteration,
+    ~str_replace(.x, "V", "Sub. ")
+  ) %>%
+  pivot_longer(
+    cols = -iteration,
+    names_to = "tau",
+    values_to = "value"
+  ) %>%
+  group_by(tau) %>%
+  mutate(post_med = median(value), post_mean = mean(value)) %>%
+  ungroup() %>%
+  left_join(
+    .,
+    tau_true.df,
+    by = "tau"
+  ) %>%
+  mutate(
+    true_value = ifelse(iteration == 1, true_value, NA),
+    post_med   = ifelse(iteration == 1, post_med, NA),
+    post_mean  = ifelse(iteration == 1, post_mean, NA)
+  ) %>%
+  mutate(
+    tau = as.factor(tau) %>% fct_reorder(true_value, mean, .desc = TRUE, .na_rm = TRUE)
+  ) %>%
+  ggplot(aes(x = iteration, y = value, colour = tau)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(aes(yintercept = true_value), colour = "red", linetype = 2, alpha = 0.6) +
+  geom_hline(aes(yintercept = post_med), colour = "blue", linetype = 2, alpha = 0.6) +
+  facet_wrap(~tau, scales = "fixed", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+ # scale_y_continuous(breaks = seq(0, 100, by = 25), limits = c(0, 100)) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Value",
+    title = "Tau_k Chain with Fixed G_k/Omega_k and Omega_0",
+    caption = "True value in red."
+  ) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+
+#Tau_k acceptance
+tauk_acc.gg <-
+result$tau_acc %>%
+  as.data.frame() %>%
+  mutate(
+    iteration = 1:nrow(.)
+  ) %>%
+  rename_with(
+    .cols = -iteration,
+    ~str_replace(.x, "V", "Sub. ")
+  ) %>%
+  pivot_longer(
+    cols = -iteration,
+    names_to = "tau",
+    values_to = "value"
+  ) %>%
+  group_by(tau) %>%
+  summarise(pct_acc = mean(value)) %>%
+  ungroup() %>%
+  mutate(
+    tau = as.factor(tau) %>% fct_reorder(pct_acc, .desc = FALSE)
+  ) %>%
+  arrange(tau) %>%
+  ggplot(aes(x = tau, y = pct_acc, colour = pct_acc, fill = pct_acc)) +
+  geom_col() +
+  scale_colour_viridis_c("Pct. Accept", breaks = seq(0.9, 1, by = 0.05), labels = scales::percent, direction = -1) +
+  scale_fill_viridis_c("Pct. Accept", breaks = seq(0.9, 1, by = 0.05), labels = scales::percent, direction = -1) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "Subject",
+    y = "Tau Acceptance",
+    title = "Tau Acceptance for Fixed G_k/Omega_k, Omega_0, alpha, lambda"
+  ) +
+  theme(legend.position = "left") +
+  coord_flip() +
+  theme_minimal()
+
+#N updates
+n_updates <- nrow(result$tau_step) - 1
+
+# #Step size / window changes
+# tau_step.gg <-
+#   result$tau_step %>%
+#   as.data.frame() %>%
+#   rename_with(~str_replace(.x, "V", "Sub. ")) %>%
+#   slice(-1) %>%
+#   mutate(
+#     update = 1:nrow(.)
+#   ) %>%
+#   dplyr::select(update, everything()) %>%
+#   as_tibble() %>%
+#   pivot_longer(
+#     cols = -update,
+#     names_to = "subject",
+#     values_to = "step_size"
+#   ) %>%
+#   mutate(
+#     subject = as.factor(subject) %>% fct_reorder(step_size, mean, .desc = T)
+#   ) %>%
+#   ggplot(aes(x = update, y = step_size, colour = subject, fill = subject)) +
+#   geom_point(size = 4, alpha = 0.2) +
+#   geom_path(size = 2, alpha = 0.4) +
+#   labs(x = "Update", y = "MCMC proposal step size") +
+#   scale_colour_viridis_d("Subject") +
+#   scale_fill_viridis_d("Subject") +
+#   scale_x_continuous(breaks = 1:n_updates, minor_breaks = 1:n_updates)
+```
+
+```{r eval = FALSE, echo = FALSE, fig.height=8, fig.width=8, warning = FALSE}
+#MCMC Convergence
+tauk.gg
+tauk_acc.gg
+#tau_step.gg
+
+#Histograms
+sd(tau_truth) - sd(result$tau_k)
+
+#Recovery
+apply(result$tau_k, 1, mean) - tau_truth
+sqrt(mean((apply(result$tau_k, 1, mean) - tau_truth)^2))
+apply(result$tau_k, 1, median) - tau_truth
+sqrt(mean((apply(result$tau_k, 1, median) - tau_truth)^2))
+
+#Summary
+sd(tau_truth) - sd(apply(result$tau_k, 1, mean))
+summary(apply(result$tau_k, 1, mean) - tau_truth)
+summary(apply(result$tau_k, 1, median) - tau_truth)
+
+#Barplot of ordered trend
+bar_num.gg <-
+  cbind(tau_truth, apply(result$tau_k, 1, mean)) %>%
+  as_tibble() %>%
+  arrange(desc(tau_truth)) %>%
+  mutate(
+    order = 1:nrow(.) %>% as.factor(),
+  ) %>%
+  pivot_longer(
+    cols = c(tau_truth, V2),
+    names_to = "type",
+    values_to = "value"
+  ) %>%
+  mutate(
+    type = ifelse(str_detect(type, "V2"), "Est. Tau", "True Tau") %>%
+           as.factor() %>%
+          fct_relevel("True Tau"),
+    text = as.character(round(value, 0)),
+  ) %>%
+  ggplot(aes(x = order, y = value, fill = type)) +
+  geom_bar(position = "dodge", stat = "identity", width = 0.6) +
+  geom_text(aes(label = text, colour = type), size = 4, vjust = -0.8, hjust = 0.1, position = "dodge") +
+  scale_fill_viridis_d("True vs. Est.") +
+  scale_colour_viridis_d("True vs. Est.")
+  
+bar_num.gg
+```
+
+
+
+
+
+### $\alpha$, $\lambda_2$ diagnostics  
+
+```{r eval = FALSE, echo = FALSE}
+#Diagnostics
+#Lambda
+lambda_2.gg <-
+  tibble(
+    lambda_2  = result$lambdas[2,],
+    mean      = alpha_tau / lambda_2,
+    iteration = 1:length(lambda_2)
+  ) %>%
+  ggplot(aes(x = iteration, y = mean)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(yintercept = alpha_truth / lam2_truth, colour = "red", linetype = 2) +
+ # facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Lambda 2",
+    title = "Lambda Chain with Fixed G_k/Omega_k and Omega_0"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+#lambda acceptance
+result$lambda_acc %>% 
+  apply(., 2, mean) %>%
+  scales::percent()
+```
+
+```{r eval = FALSE, echo = FALSE}
+(alpha_tau / mean(result$lambdas[2,])) - (alpha_truth / lam2_truth)
+(alpha_tau / median(result$lambdas[2,])) - (alpha_truth / lam2_truth)
+lambda_2.gg
+ggplot() + geom_line(aes(y = cumsum(result$lambda_acc), x = 1:length(result$lambda_acc))) + labs(y = "Mean of Tau_k")
+```
+
+
+
+# $\tau_k$, $\alpha_tau$, $\lambda_2$ with fixed $\Omega_0, \Omega_k/G_k$  
+
+```{r tauk, eval = FALSE, echo = FALSE}
+  #Grab no. of subjects, rois, volumes
+  K  <- length(y)
+  p  <- ncol(y[[1]])
+  vk <- map_dbl(y, nrow)
+  Sk <- map(.x = y, ~t(.x) %*% .x)
+
+  #Set lambda 1-3 penalty gamma a, b  hyperparams (uninformative / flat)
+  alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1/10, 1/10, 1/10)
+  
+  #Starting value for alpha_tau & lambda_2 (based off of subjects & a mean of 50)
+  mu_tau    <- 50 #Hyper-mean of tau_k = alpha_tau / lambda_2
+  sigma_tau <- 5 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
+  lambda_2  <- 1/2 #Fix rate lambda_2
+  alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
+  
+  #Check distributions
+  #rnorm(1000, mu_tau, sd = sigma_tau) %>% hist() #mean tau_k prior
+  #rnorm(1000, mu_tau, sd = sigma_tau * lambda_2) %>% hist() #alpha prior
+  #(100 - rgamma(1000, alpha_tau, rate = lambda_2)) %>% hist() #tau distribution
+
+  #MCMC step size/window
+  step_tau     <- rep(10, K)
+  step_alpha   <- 1
+  step_lambda2 <- 0.01
+  
+  #How many updates during burn to adapt window/step-size
+  n_updates <- floor(n_samples / n_updates)
+
+  #Initialize estimates for Omega_k, Omega_0
+  #Omega_k - tune lambda by bic and then grab G and Omega_0
+  lambda_grid <- 10^seq(-1, 0.5, length.out = 20)
+  bic         <- vector(mode = "numeric", length = 0)
+
+  #Tune lambda for independent glasso
+  for (lam in lambda_grid) {
+    # omega_k <- ind_graphs(y, lam)
+    # bic   <- c(bic, bic_cal(y, omega_k))
+    omega_k <- ind_graphs(y, lam)
+    omega_k <- array(unlist(omega_k), dim = c(p, p, K))
+    bic     <- c(bic, bic_cal(y, omega_k))
+  }
+  
+  #Compute initial est. for omega_k, G_k/adj_k via best mBIC, and Omega_0
+  omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
+  adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
+  #omega_0 <- Reduce("+", omega_k) / K #elementwise mean
+  omega_0 <- elementwise_median(omega_k) #elementwise median, more robust to outliers
+  sigma_0 <- solve(omega_0)
+
+  #Initialize estimates for tau_k
+  tau_vec   <- vector(mode = "numeric", length = K)
+
+  #Iterate over each subject, find optimal tau_k based on posterior in 1D
+  for (k in 1:K) {
+    #print(k)
+    #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
+    f_opt <- function(tau) {
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100)
+    }
+    #Optimize in 1D
+    tau_vec[k] <- c(optimize(f_opt, interval = c(0, 100), tol = 0.01)$min)
+  }
+  
+  #E - bayes
+  lambda_2  <- mean(tau_vec) / sd(tau_vec)^2
+  alpha_tau <- mean(tau_vec) * lambda_2 
+  
+  # #Initialize alpha_tau from tau_vec
+  # #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau = 50, sigma_tau = 20
+  # f_opt <- function(alpha_tau) {
+  #   -1 * log_alpha_posterior(alpha_tau, tau_vec, lambda_2 = lambda_2, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  # }
+  # #Optimize in 1D
+  # alpha_tau <- c(optimize(f_opt, lower = 1, upper = 50, tol = 0.01)$min)
+  # alpha_tau
+  # 
+  # #Initialize lambda_2 from tau_vec
+  # #Alpha_tau posterior for fixed tau_k, lambda_2 = 0, mu_tau, sigma_tau
+  # f_opt <- function(lambda_2) {
+  #   -1 * log_lambda_posterior(lambda_2, alpha_tau, tau_vec, mu_tau = mu_tau, sigma_tau = sigma_tau, trunc = c(0, 100), type = "mode")
+  # }
+  # #Optimize in 1D
+  # lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
+  # lambda_2
+```
+
+```{r}
+  #Set up storage for results
+  #Omegas
+  omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
+  accept_k   <- vector(mode = "numeric", length = K)
+  omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
+  pct_omega_acc <- vector(mode = "integer", length = n_samples)
+  pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
+
+  #Taus, Alpha, Lambda_2
+  accept_tau     <- matrix(NA, nrow = 0, ncol = K)
+  accept_alpha   <- matrix(NA, nrow = 0, ncol = 1)
+ # accept_alpha   <- matrix(NA, nrow = 0, ncol = K)
+  accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1)
+  step_tau_mat   <- step_tau #Adaptive window for MH tau
+  #step_alpha_mat <- step_alpha 
+  #step_lam2_mat  <- step_lambda2
+  tau_res        <- array(NA, c(K, n_samples))
+  #mu_tau_res     <- array(NA, c(1, n_updates + 1))
+  #sigma_tau_res  <- array(NA, c(1, n_updates + 1))
+  alpha_res      <- vector(mode = "numeric", length = n_samples)
+  #alpha_res      <- array(NA, c(K, n_samples))
+  
+  #Lambdas
+  lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
+
+  #Set timer
+  timer   <- 0
+  t_start <- proc.time()
+  n_samples = 1000; n_burn = 1000; n_updates = 10;
+  n_iter  <- (n_burn + n_samples)
+
+  #Loop through sampling algorithm n_samples + n_burn # times
+  for (t in 1:n_iter) {
+    #Print iteration for early testing
+    print(paste0("Iteration: ", t))
+    
+    #Update Lambdas via direct sampling
+    #Lambda 1 sparsity-inducing penalty on G_k
+    card_k   <- (sapply(adj_k, sum) - p)/2 #Cardinality of G_k / # edges
+    lambda_1 <- rgamma(1, alpha[1] + K, rate = beta[1] + sum(card_k))
+
+    #Lambda 2 Gamma rate parameter for df/shrinkage tau_k prior
+    #lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
+    lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
+                                     mu_tau, sigma_tau, window = step_lambda2)
+    lambda_2       <- lambda_next$lambda_2
+    accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
+
+    #Lambda 3 Sparse L-1 penalty on group precision omega_0 prior
+    card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges or non-zero elements
+    lambda_3 <- rgamma(1, alpha[3] + card_0, beta[3] + sum(abs(omega_0))/2)
+
+    #Invert for Covariance & randomly select row_col pair
+    sigma_0 <- matinv(omega_0)
+    row_col <- sample(1:p, 1)
+    
+    #Pass back to omega_k
+    omega_k  <- omegaK_truth
+    #omega_k <- omega_k_update
+    
+
+    #Tau_k update
+    tau_k <-
+      map(
+        .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
+        ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x])
+      ) #Return list object
+    # for (k in 1:K) {
+    #   print(paste0("sub: ", k))
+    #   tau_update(tau_vec[k], omega_k[[k]], sigma_0, alpha_tau, lambda_2, step_tau[k])
+    # }
+    accept_tau <- rbind(accept_tau, tau_k %>% map_lgl("accept")) #Pull out acceptance
+    tau_vec    <- tau_k %>% map_dbl("tau_k") #Pull out the numeric tau_k list object
+
+    #Adaptive tau step-size/window for MH proposal
+     if (t %% n_updates == 0 & t <= n_burn) {
+        #Compute acceptance rate (colwise mean)
+        accept_rate <- apply(accept_tau, 2, mean)
+        #For each subject, adjust tau_k proposal (lognormal) step size
+         for (k in 1:K) {
+           if (accept_rate[k] > 0.75) { #If accepting to many, inc variance of proposal
+            step_tau[k] <- min(20, step_tau[k] + 1)
+           } else if (accept_rate[k] < 0.5) { #If not accepting enough, dec variance of proposal
+             step_tau[k] <- max(1, step_tau[k] - 1)
+            }
+         }
+         step_tau_mat  <- rbind(step_tau_mat, step_tau) #Record adaptive step sizes
+         accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
+     }
+    
+    #Old alpha update
+    # alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)
+    # alpha_tau    <- alpha_next$alpha_tau
+    # accept_alpha <- rbind(accept_alpha, alpha_next$accept)
+    
+
+    #Update Omega_0 via Wang and Li (2012) + step-proposal distribution
+    # D       <- apply(mapply('*', omega_k, tau_vec, SIMPLIFY = 'array'), 1:2, sum)
+    # omega_0 <- omega0_update(omega_0, D, sum(tau_vec), lambda_3)
+    # pct_accept <- omega_0$pct_accept #Off-diagonal acceptance%
+    # omega_0 <- omega_0$omega #Precision matrix itself
+    omega_0 <- omega0_truth
+
+    #Save those results after burn-in
+    if(t > n_burn) {
+      t_burn <- t - n_burn
+    #  omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
+    #  omega0_res[, t_burn]   <- omega_0[upper.tri(omega_0, diag = TRUE)]
+      tau_res[, t_burn]      <- tau_vec
+      alpha_res[t_burn]      <- alpha_tau
+      lambda_res[, t_burn]   <- c(lambda_1, lambda_2, lambda_3)
+     # pct_omega_acc[t_burn]  <- pct_accept
+      pct_k_acc[t_burn, ]    <- accept_k
+    }
+
+    #Track temporal progress (every 20% progress update)
+    if (t %% floor(0.2 * (n_samples + n_burn))) {
+      t_now   <- proc.time()
+      timer   <- c(timer, (t_now - t_start)[3])
+      t_start <- t_now
+    }
+  }
+
+  #Result list of results
+  result <-
+    list(
+     # omega_0    = omega0_res,
+    #  omega_k    = omegas_res,
+    #  omega_acc  = pct_omega_acc,
+      tau_k       = tau_res,
+      tau_acc     = accept_tau,
+      tau_step    = step_tau_mat,
+      alpha_tau   = alpha_res,
+      #alpha_acc   = accept_alpha,
+      #alpha_step  = step_alpha_mat,
+      lambdas     = lambda_res, 
+      lambda_acc  = accept_lambda2,
+    #  lambda_step = step_lam2_mat,
+      timer       = timer
+    )
+
+#write out
+write_rds(result, "./testing/tau_k_alpha_fixed_omega.rds")
+```
+
+## $\tau_k$ diagnostics
+
+```{r tauk_diag, eval = FALSE, echo = FALSE}
+#Read in result to display diagnostics
+result <- read_rds("./testing/tau_k_alpha_fixed_omega.rds")
+n_iter <- ncol(result$tau_k)
+k <- nrow(result$tau_k)
+set.seed(4)
+
+#Truth data frame for plotting
+tau_true.df <- 
+  tibble(
+    tau = str_c("Sub. ", 1:k),
+    true_value = tau_truth
+  )
+
+#Diagnostics
+#Tauk
+tauk.gg <-
+  t(result$tau_k) %>%
+  as.data.frame() %>%
+  mutate(
+    iteration = 1:nrow(.)
+  ) %>%
+  rename_with(
+    .cols = -iteration,
+    ~str_replace(.x, "V", "Sub. ")
+  ) %>%
+  pivot_longer(
+    cols = -iteration,
+    names_to = "tau",
+    values_to = "value"
+  ) %>%
+  left_join(
+    .,
+    tau_true.df,
+    by = "tau"
+  ) %>%
+  mutate(
+    true_value = ifelse(iteration == 1, true_value, NA)
+  ) %>%
+  mutate(
+    tau = as.factor(tau) %>% fct_reorder(true_value, mean, .desc = TRUE, .na_rm = TRUE)
+  ) %>%
+  ggplot(aes(x = iteration, y = value, colour = tau)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(aes(yintercept = true_value), colour = "red", linetype = 2) +
+  facet_wrap(~tau, scales = "fixed", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Value",
+    title = "Tau_k Chain with Fixed G_k/Omega_k and Omega_0",
+    caption = "True value in red."
+  ) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+
+#Tau_k acceptance
+tauk_acc.gg <-
+result$tau_acc %>%
+  as.data.frame() %>%
+  mutate(
+    iteration = 1:nrow(.)
+  ) %>%
+  rename_with(
+    .cols = -iteration,
+    ~str_replace(.x, "V", "Sub. ")
+  ) %>%
+  pivot_longer(
+    cols = -iteration,
+    names_to = "tau",
+    values_to = "value"
+  ) %>%
+  group_by(tau) %>%
+  summarise(pct_acc = mean(value)) %>%
+  ungroup() %>%
+  mutate(
+    tau = as.factor(tau) %>% fct_reorder(pct_acc, .desc = FALSE)
+  ) %>%
+  arrange(tau) %>%
+  ggplot(aes(x = tau, y = pct_acc, colour = pct_acc, fill = pct_acc)) +
+  geom_col() +
+  scale_colour_viridis_c("Pct. Accept", breaks = seq(0.9, 1, by = 0.05), labels = scales::percent, direction = -1) +
+  scale_fill_viridis_c("Pct. Accept", breaks = seq(0.9, 1, by = 0.05), labels = scales::percent, direction = -1) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "Subject",
+    y = "Tau Acceptance",
+    title = "Tau Acceptance for Fixed G_k/Omega_k and Omega_0"
+  ) +
+  theme(legend.position = "left") +
+  coord_flip() +
+  theme_minimal()
+```
+
+```{r tauk_diag_display, eval = FALSE, echo = FALSE, fig.height=8, fig.width=8, warning = FALSE}
+#Recovery
+apply(result$tau_k, 1, mean) - tau_truth
+summary(apply(result$tau_k, 1, mean) - tau_truth)
+summary(apply(result$tau_k, 1, median) - tau_truth)
+
+cbind(tau_truth, apply(result$tau_k, 1, mean))
+
+#MCMC Convergence
+tauk.gg
+tauk_acc.gg
+# result$tau_step %>%
+#   as.data.frame() %>%
+#   mutate(tau_step = paste0("Adaptive step ", 1:nrow(.))) %>%
+#   rename_with(
+#     .cols = everything(),
+#     ~str_replace(.x, "V", "Subj. ")
+#   ) %>%
+#   dplyr::select(tau_step, everything()) %>%
+#   group_by(tau_step) %>%
+#   gt() %>%
+#   tab_header(title = "Adaptive Tau-proposal Step-size/Variance")
+```
+
+## $\alpha_tau$ diagnostics  
+
+
+
+```{r eval = FALSE, echo = FALSE}
+#Diagnostics
+#Alpha_tau
+alpha_tau.gg <-
+  tibble(
+    alpha_tau = result$alpha_tau[1],
+    iteration = 1:n_iter
+  ) %>%
+  ggplot(aes(x = iteration, y = alpha_tau)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(yintercept = alpha_truth, colour = "red", linetype = 2) +
+ # facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Alpha tau",
+    title = "Alpha Chain with Fixed G_k/Omega_k and Omega_0"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+#alpha acceptance
+result$alpha_acc %>% 
+  apply(., 2, mean) %>%
+  scales::percent()
+```
+
+```{r alpha_diag_display, eval = FALSE, echo = FALSE}
+#How far from truth
+mean(result$alpha_tau) - alpha_truth
+median(result$alpha_tau) - alpha_truth
+
+#Plot MCMC chain diagnostic
+alpha_tau.gg
+ggplot() + geom_line(aes(y = cumsum(result$alpha_acc), x = 1:length(result$alpha_acc)))
+
+#Estimated posterior 100 - tau
+(100 - truncdist::rtrunc(
+    spec = "gamma", a = 0, b = 100, n = 1000, 
+    shape = median(result$alpha_tau), rate = median(result$lambdas[,2])
+    )) %>% hist()
+
+#True 100-tau
+(100 - truncdist::rtrunc(
+    spec = "gamma", a = 0, b = 100, n = 1000, 
+    shape = alpha_truth, rate = lam2_truth
+    )) %>% hist()
+```
+
+## $\lambda_2$ diagnostics  
+
+```{r eval = FALSE, echo = FALSE}
+#Diagnostics
+#Lambda
+lambda_2.gg <-
+  tibble(
+    lambda_2  = result$lambdas[2,],
+    iteration = 1:n_iter
+  ) %>%
+  ggplot(aes(x = iteration, y = lambda_2)) +
+#  geom_point(size = 0.8, alpha = 0.6) +
+  geom_line(size = 0.6, alpha = 0.8) +
+  geom_hline(yintercept = lam2_truth, colour = "red", linetype = 2) +
+ # facet_wrap(~tau, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Lambda 2",
+    title = "Lambda Chain with Fixed G_k/Omega_k and Omega_0"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 0.5))
+
+#lambda acceptance
+result$lambda_acc %>% 
+  apply(., 2, mean) %>%
+  scales::percent()
+```
+
+```{r eval = FALSE, echo = FALSE}
+mean(result$lambdas[2,]) - lam2_truth
+median(result$lambdas[2,]) - lam2_truth
+
+lambda_2.gg
+ggplot() + geom_line(aes(y = cumsum(result$lambda_acc), x = 1:length(result$lambda_acc)))
+```
+
+
+
+
+## Distribution for est. 100 - $\tau_k$ versus truth  
+
+```{r}
+#Estimate
+lambda_est <- mean(result$lambdas[2,])
+alpha_est  <- mean(result$alpha_tau)
+
+#Truth
+lambda_true <- lam2_truth
+alpha_true  <- alpha_truth
+
+#Display distributions for 100 - tau_k
+tibble(
+  estimate = 100 - truncdist::rtrunc(spec = "gamma", n = 100, a = 0, b = 100,
+                                 shape = alpha_est, rate = lambda_est, log = FALSE),
+  truth    = 100 - truncdist::rtrunc(spec = "gamma", n = 100, a = 0, b = 100,
+                                 shape = alpha_true, rate = lambda_true, log = FALSE)
+) %>%
+  pivot_longer(
+    cols = everything(),
+    values_to = "value",
+    names_to  = "type"
+  ) %>%
+  ggplot(aes(x = value, colour = type, fill = type)) +
+  geom_density(alpha = 0.6, adjust = 1, trim = FALSE) +
+  #geom_histogram(alpha = 0.6, binwidth = 5, colour = "black", position = "dodge2") +
+  labs(
+    x = "100 - Tau_k",
+    y = "Density",
+    title = "Est. vs. True 100 - Tau_k Distribution(s)"
+  ) +
+  scale_colour_viridis_d("Type") +
+  scale_fill_viridis_d("Type")
+```
+
+
+
+# $\Omega_k$ & $G_k$ with fixed $\Omega_0$ and $\tau_k$
+
+```{r g_omega_k, eval = FALSE, echo = FALSE}
+#Params
+y <- sim_res$data_list
+n_samples <- 100
+n_burn <- 0
+n_updates <- 0
+
+# #Parallel
+n_cores <- parallel::detectCores() - 1
+cl <- parallel::makeCluster(n_cores)
+on.exit(parallel::stopCluster(cl)) #When done stop cluster
+doParallel::registerDoParallel(cl) #Initialize clusters
+`%dopar%` <- foreach::`%dopar%` #Need to pass this function later
+    
+  #Grab no. of subjects, rois, volumes
+  K  <- length(y)
+  p  <- ncol(y[[1]])
+  vk <- map_dbl(y, nrow)
+  Sk <- map(.x = y, ~t(.x) %*% .x)
+
+  #Set lambda 1-3 penalty gamma a, b  hyperparams
+  alpha <- c(1, 1, 1) #1 - G_k, 2 - tau_k, 3 - Omega_0 (glasso)
+  beta  <- c(1, 1, 1)
+  
+#Initialize Omega_k estimates for initial values
+  #Omega_k - tune lambda by bic and then grab G and Omega_0
+  lambda_grid <- 10^seq(-1, 0.5, length.out = 20)
+  bic         <- vector(mode = "numeric", length = length(lambda_grid))
+
+  #Tune lambda for independent glasso
+  for (lam in lambda_grid) {
+    omega_k  <- ind_graphs(y, lam)
+    bic[lam] <- bic_cal(y, omega_k)
+  }
+  #Compute initial est. via best bic
+  omega_k <- ind_graphs(y, lambda_grid[which.min(bic)])
+  adj_k   <- map(.x = omega_k, ~abs(.x) > 0.001)
+  #omega_0 <- Reduce("+", omega_k) / K
+
+  #Set up storage for results
+  #Omegas
+  omegas_res <- array(NA, c(p * (p + 1) / 2, K, n_samples))
+  #omega0_res <- array(NA, c(p * (p + 1) / 2, n_samples))
+  #pct_omega_acc <- vector(mode = "integer", length = n_samples)
+  pct_k_acc  <- matrix(NA, nrow = n_samples, ncol = K)
+
+  #Lambdas
+  lambda_res <- array(NA, c(3, n_samples), dimnames = list(str_c("lambda_", 1:3)))
+
+  #Set timer
+  timer   <- 0
+  t_start <- proc.time()
+  n_iter  <- (n_burn + n_samples)
+  #n_iter  <- 3
+
+  #Loop through sampling algorithm n_samples + n_burn # times
+  for (t in 1:n_iter) {
+    #Print iteration for early testing
+    print(paste0("Iteration: ", t))
+    
+    #Update Lambdas via direct sampling
+    #Lambda 1 sparsity-inducing penalty on G_k
+    card_k   <- (map_dbl(adj_k, sum) - p)/2 #Cardinality of G_k / # edges
+    lambda_1 <- rgamma(1, alpha[1] + K, rate = beta[1] + sum(card_k)) #alpha[1] affects this a lot
+
+    #Invert for Covariance & randomly select row_col pair
+    sigma_0 <- matinv(Omega_0)
+    tau_vec <- Tau_k
+    row_col <- sample(1:p, 1)
+    
+        #Initialize Acceptance  
+        accept_k <- vector(mode = "numeric", length = K)
+        #print(paste0("Subject -- ", k))
+        #omega_k_update <- list()
+        #Update G_k, Omega_k via modified BIPS proposal & update scheme - Wang and Li (2012)
+        omega_Gk_update <- foreach::foreach(
+          k         = 1:K, #Subject index
+#         .combine  = "c", #List output
+#         .multicombine = TRUE,
+#         .init     = list(omega_k = list(), accept = list()),
+          .packages = c("bayesRCM", "BDgraph", "Matrix"), #Packages
+          .noexport = c("graph_update","gwish_ij_update", "rgwish") #Functions necessary to export
+        ) %dopar% {
+        #for(k in 1:k) {
+        print(paste0("Subject -- ", k))
+        #Propose/update G_k, Omega_k via
+        update <-
+          graph_update(
+            row_col  = row_col,
+            df       = tau_vec[k] + 2,
+            D        = sigma_0 * tau_vec[k],
+            v        = vk[k],
+            S        = Sk[[k]],
+            adj      = adj_k[[k]],
+            omega    = omega_k[[k]],
+            lambda_1 = lambda_1
+          )
+        
+        #Record acceptance rate
+        accept_k[k] <- update$accept
+
+        #Upper triangular and averaged transpose for computational stability
+        tri_adj <- update$adj
+        tri_adj[lower.tri(tri_adj, diag = T)] <- 0
+  
+        #Update omega_k
+        omega_k_update <- BDgraph::rgwish(1, tri_adj, vk[k] + tau_vec[k] + 2, Sk[[k]] + sigma_0 * tau_vec[k])
+        omega_k_update <- (omega_k_update + t(omega_k_update)) / 2 # for computational stability
+        # omega_k_update[[k]] <- BDgraph::rgwish(1, tri_adj, vk[k] + tau_vec[k] + 2, Sk[[k]] + sigma_0 * tau_vec[k])
+        # omega_k_update[[k]] <- (omega_k_update[[k]] + t(omega_k_update[[k]])) / 2 # for computational stability
+
+        #Return updated omega_k
+        #omega_k_update
+        return(omega_k_update)
+      }
+      #Check how different the new omega_k_update is from the original
+      # new_adj_k  <- map(.x = omega_k_update, ~abs(.x) > 0.001)
+      # omegak_dif <- map2_dbl(.x = omega_k, .y = omega_k_update, ~mean(abs(.x - .y)))
+      # adjk_dif   <- map2_dbl(.x = adj_k, .y = new_adj_k, ~mean(abs(.x - .y)))
+      # #Summary
+      # map(list(omegak_dif, adjk_dif), summary)
+      # which(adjk_dif == 0) #check if any adjacency hasn't changed
+      
+      #Pass to update
+      #omega_k <- omega_Gk_update
+      omega_k <- omega_Gk_update
+    #Update Omega_0 via Wang and Li (2012) + step-proposal distribution
+    #omega_0 <- Omega_0 #Precision matrix itself
+
+    #Save those results after burn-in
+    if(t > n_burn) {
+      t_burn <- t - n_burn
+      omegas_res[, , t_burn] <- sapply(omega_k, function(x) x[upper.tri(x, diag = TRUE)])
+      lambda_res[, t_burn]   <- c(lambda_1)
+     # pct_k_acc[t_burn, ]    <- accept_k
+    }
+
+    #Track temporal progress (every 20% progress update)
+    if (t %% floor(0.2 * (n_samples + n_burn))) {
+      t_now   <- proc.time()
+      timer   <- c(timer, (t_now - t_start)[3])
+      t_start <- t_now
+    }
+  }
+
+  #Result list of results
+  omega_k_result <-
+    list(
+      omega_k   = omegas_res,
+    #  accept_k  = pct_k_acc,
+      lambdas   = lambda_res,
+      timer     = timer
+    )
+  
+  #Write out for safekeeping
+  write_rds(omega_k_result, str_c("../results/", date_file("debug_omegak.RDS")))
+```
+
+```{r graph_update_test, eval = FALSE}
+#graph_update <- function(row_col, df, D, v, S, adj, omega, lambda_1) {
+            k <- 1
+            row_col  = row_col
+            df       = tau_vec[k] + 2
+            D        = sigma_0 * tau_vec[k]
+            v        = vk[k]
+            S        = Sk[[k]]
+            adj      = adj_k[[k]]
+            omega    = omega_k[[k]]
+            lambda_1 = lambda_1
+
+
+    # Network size
+    p <- nrow(omega)
+
+    # reorder the row_col-th row and column to be first in the update and ensure uppertrianguler adj/omega
+    # need to work with upper triangular omega and adj, and this permutation is necessary!!!
+    reorder   <- c(row_col, setdiff(1:p, row_col))
+    backorder <- match(1:p, reorder)
+
+    D     <- D[reorder,reorder]
+    S     <- S[reorder,reorder]
+    omega <- omega[reorder,reorder]
+    adj   <- adj[reorder,reorder]
+
+    # Updated posterior params from data
+    b_post <- df + v;
+    D_post <- D + S;
+
+    #Adjacency threshold / graph
+    omega  <- omega * adj
+    accept <- rep(FALSE, (p - 1))
+    
+    # Sample off-diagonal elements
+    i <- 1; # current 1st row/col is old row_col-th row/col (i.e. the one we want to update)
+    for (j in 2:p) {
+      print(str_c("rowcol: ", j))
+      j <- 2
+        #1. Propose G'
+        #a. calculate the logit of no edge vs an edge (p is prob of having no edge)
+        #Check b_post, D_post, omega
+        map_lgl(list(D_post, omega), isSymmetric) #check sym
+        any(eigen(D_post)$values < 0) #check pd
+        any(eigen(omega)$values < 0)
+        w <- log_H(b_post, D_post, omega, i, j) + lambda_1
+        #Issue is in previous iteration, one entire row/col is zero off diagonal --> c = 0 --> log_H nan
+        #Not sure if it's a bug or an edge case, what happens if it's unnconnected at all?
+        #Checking the simulated data there are a few with only one true off diagonal connection
+
+        #Obtain probability of edge
+        p <- 1 / (1 + exp(w)) #expit --> probability of edge
+        ij_cur  <- adj[i, j]
+        ij_prop <- runif(1) <= p
+        #print(paste0("ij_cur:", ij_cur))
+        #print(paste0("ij_prop:", ij_cur))
+        
+        #b. If it's accepted (yay!)
+        if (ij_prop != ij_cur) { #If accepted
+            #Record acceptance & make proposal
+            accept[j - 1]  <- TRUE
+            adj_prop       <- adj #Start with old adjacency/graph
+            adj_prop[i, j] <- adj_prop[j,i] <- ij_prop #replace w proposal from above
+
+            tri_adj_prop <- adj_prop
+            tri_adj_prop[lower.tri(tri_adj_prop, diag = T)] <- 0
+            omega_prop <- BDgraph::rgwish(1, tri_adj_prop, df, D) #Propose via prior
+            omega_prop <- (omega_prop + t(omega_prop))/2  # for computational stability
+
+
+            # step3: update G using MH, accept G' with mh_prob ratio r2
+            mh_prob <- log_GWish_NOij_pdf(df, D, omega_prop, i, j, ij_cur) -
+                       log_GWish_NOij_pdf(df, D, omega_prop, i, j, ij_prop);
+
+            if (log(runif(1)) < mh_prob) { #If accepted
+                adj[i,j] <- adj[j,i] <- ij_cur <- ij_prop
+
+
+                # step 4: update \omega_ij if G' is accepted via paper
+                omega <- gwish_ij_update(b_post, D_post, omega, i, j, ij_cur)
+
+                # If omega update is not symmetric, force symmetry by upper triangle via Matrix package
+                # if (!Matrix::isSymmetric(omega)) {
+                #   #print('Asymetric proposition, forcing symmetric with Matrix::forceSymmetric()')
+                #   omega <- Matrix::forceSymmetric(omega, uplo = "U") #Determined by upper triangle
+                # }
+            }
+        }
+
+    } # end of j-loop
+
+    # Shuffle row/col in matrices back to original order (put row_col ii back where it belongs)
+    omega <- omega[backorder,backorder]
+    adj   <- adj[backorder,backorder]
+
+    #Return precision matrices and graphs per subject
+    return(list(omega = omega, adj = adj, accept = mean(accept)))
+
+```
+
+```{r log_H_R, eval = FALSE}
+#omegas_res[,1,t-2]
+#omegas_res[,1,t-1]
+#omega_k[[1]]
+
+#sourceCpp("../src/bayesRCM_helper_funcs.cpp")
+log_H_R <- function(nu = b_post, V = D_post, Omega = omega, i, j) {
+#  nu <- b_post
+#  V  <- D_post
+ # Omega <- omega
+ # i <- 1
+#  j <- 2
+  
+  #(i,j) = 0
+  Omega0 <- Omega;
+  Omega0[i,j] = 0;  Omega0[j,i] = 0;
+  Ome12 = Omega0[j,]; Ome12 = Ome12[-j];
+  Ome12 = matrix(Ome12, nrow = 1);
+  Ome22 = Omega0;
+  Ome22 = Ome22[-j, -j];
+  c = Ome12%*%solve(Ome22,t(Ome12)); # check
+  #Omega0_ij << Omega(i-1,i-1) << 0 << arma::endr << 0 << c(0,0) << arma::endr;
+  Omega0_ij = matrix(c(Omega[i,i], 0, 0, c[1,1]), byrow = TRUE, nrow = 2)
+  
+  # (i,j) = 1, note j>i
+  #arma::mat Omega1_ij, Ome11, A, test;
+  Ome12 = Omega;
+  Ome12[i+1, ] = Ome12[j, ]; Ome12 = Ome12[i:(i + 1), ];
+  Ome12 = Ome12[ ,-c(i, j)]
+
+  Ome22 = Omega;
+  Ome22 = Ome22[-c(i,j), -c(i,j)]
+  Omega1_ij = Ome12 %*% solve(Ome22,t(Ome12)); #check
+  
+  #A matrix
+  #Ome11 << Omega(i-1,i-1) << Omega(i-1,j-1)  << arma::endr << Omega(i-1,j-1)  << Omega(j-1,j-1)  << arma::endr;
+  Ome11 = matrix(c(Omega[i,i], Omega[i,j], Omega[i,j], Omega[j,j]), byrow = TRUE, nrow = 2)
+  A = Ome11-Omega1_ij;
+
+  #log H computation
+  a11 = A[1,1]; V_jj = as.matrix(V[j,j]);
+  V_ij = matrix(c(V[i,i], V[i,j], V[i,j], V[j,j]), byrow = TRUE, nrow = 2)
+  det_0 = det(Omega0_ij);
+  det_1 = det(Omega1_ij);
+  f = -log_iwishart_InvA_const(nu,V_jj) - log_J(nu,V_ij,a11) +
+      (nu-2)/2*(log(det_0) - log(det_1)) - sum(diag((V_ij %*% (Omega0_ij-Omega1_ij))))/2;
+  
+}
+
+
+
+```
+
+```{r gwish_ij_test, eval = FALSE}
+# c) If G′ is accepted, set ωij = 0, update the parameters ωjj from (5.5). If G′ is rejected, update the parameters (ωij , ωjj ) from its full conditional distribution using Proposition 2.2 
+#(i). Specifically, in the notation of Proposition 2.2, let A = (aij ) = Ωee|V \e, h = b + n and B = (Bij ) = Dee + See.
+# In addition, let F = (fij ) = Ωe,V \e(ΩV \e,V \e)−1ΩV \e,e, then (ωij , ωjj ) is
+# generated as follows:
+# (i) Generate u | a11 ∼ N(−B^−1_22 B12 a11, B^−1_22 a11) and v | a11 ∼W(h, B22).
+# (ii) Set ωij = u + f12 and ωjj = v + a−111 u2 + f22.
+
+gwish_ij_update <- function(b, D, omega, i, j, ij_cur) {
+
+    #Graph dimension of network/graph
+    p <- nrow(omega)
+
+    ## If no edge between (i,j), omega_ij=0
+    if (ij_cur == 0) {
+
+        omega[i,j] <- omega[j,i] <- 0;
+
+        o12 <- matrix(omega[j,-j], nrow = 1)
+        o22 <- omega[-j,-j]
+
+        C <- matABinvA(o12, o22)
+
+        #omega[j,j] = rWishart(1,b,1/D[j,j]) + c;
+        omega[j,j] <- rchisq(1, b)/D[j,j] + C;
+
+    } else { # If e_ij \in E, i.e. edge exists ij_curr = 1
+
+        #Reorder & take Cholesky decomp
+        reorder <- c(setdiff(1:p, c(i,j)), i, j)
+        o_pt    <- omega[reorder, reorder]
+        
+        #Cholesky decomp (must be Sym, PD)
+        #print(o_pt)
+        R <- matchol(o_pt)
+
+        #Posterior params
+        m_post      <- -R[p - 1, p - 1] * D[i,j] / D[j,j]
+        sig_post    <- 1 / sqrt(D[j, j])
+        R[p - 1, p] <- rnorm(1) * sig_post + m_post;
+        R[p, p]     <- sqrt(rgamma(1, b/2,rate = D[j, j]/2))
+
+        #Update
+        omega_update <- t(R[,(p - 1):p]) %*% R[ ,p];
+        omega[i,j]   <- omega[j,i] <- omega_update[1]
+        omega[j,j]   <- omega_update[2]
+    }
+    #Return
+    return(omega)
+}
+```
+
+```{r gk_results, fig.height = 8}
+#Read in result to display diagnostics
+result <- read_rds("../results/2023_02_08_debug_omegak.RDS")
+n_iter <- dim(result$omega_k)[3]
+set.seed(4)
+roi_samp <- sample(dim(result$omega_k)[1], 20) %>% sort()
+
+#result df
+omegak.df <-
+  map_df(.x = 1:n_iter,
+         ~tibble(iteration = .x, 
+                 omega_k   = list(as.data.frame(result$omega_k[,,.x]) %>% mutate(roi = 1:n())))
+  ) %>%
+  unnest(cols = c(omega_k)) %>%
+  rename_with(
+    .cols = -iteration,
+    ~str_replace(.x, "V", "Sub. ")
+  ) %>%
+  pivot_longer(
+    cols = contains("Sub"),
+    names_to = "subject",
+    values_to = "value"
+  ) 
+
+#ggplot
+omegak.gg <-
+  omegak.df %>%
+  filter(roi %in% roi_samp) %>% #Take a sample for plotting
+  mutate(
+    subject = as.factor(subject) %>% fct_reorder(value, mean, .desc = TRUE),
+    roi     = as.factor(str_c("ROI Pair ", roi)) %>% fct_reorder(value, mean, .desc = TRUE)
+  ) %>%
+  ggplot(aes(x = iteration, y = value, colour = subject)) +
+  geom_point(size = 0.8, alpha = 0.2) +
+  geom_line(size = 0.6, alpha = 0.6) +
+  facet_wrap(~roi, scales = "free_y", nrow = 5) +
+  scale_x_continuous(breaks = seq(0, n_iter, by = floor(1/4*n_iter)), 
+                     minor_breaks = seq(0, n_iter, by = floor(1/4*n_iter))) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Iteration",
+    y = "Value",
+    title = "Omega_k Chains by ROI & Subject w/ Fixed Tau_k and Omega_0"
+  )
+
+omegak.gg
+```
+
+```{r gk_accuracy}
+#Set up null matrix of correct dimension to recover full precision for each Kth subject
+p  <- ncol(data_list[[1]])
+
+#Function to fill matrix w/upper triangle and make symettric
+fill_mat <- function(res_vec, p) {
+  null.mat <- matrix(data = 0, nrow = p, ncol = p)
+  null.mat[upper.tri(null.mat, diag = TRUE)] <- res_vec
+  null_temp.mat <- null.mat
+  diag(null_temp.mat) <- 0
+  full_precision <- null.mat + t(null_temp.mat)
+  return(full_precision)
+}
+
+#Process results and summarise
+omegak_acc.df <- 
+  omegak.df %>%
+  group_by(subject, roi) %>%
+  summarise(
+    post_mean = mean(value),
+    post_median = median(value),
+    .groups = "drop"
+  ) %>%
+  nest(result = -c(subject)) %>%
+  mutate(
+    mean_mat = map(.x = result, ~fill_mat(.x$post_mean, p)),
+    med_mat  = map(.x = result, ~fill_mat(.x$post_median, p)),
+    truth    = Omega_k,
+    mean_abs_dif = map2_dbl(.x = mean_mat, .y = truth, ~mean(abs(.x - .y))),
+    med_abs_dif  = map2_dbl(.x = med_mat,  .y = truth, ~mean(abs(.x - .y))),
+    mean_sq_dif  = map2_dbl(.x = mean_mat,  .y = truth, ~mean((.x - .y)^2)),
+    med_sq_dif   = map2_dbl(.x = med_mat,  .y = truth, ~mean((.x - .y)^2)),
+  )
+  
+  
+#Display mean sq/abs difference based on posterior mean/med
+omegak_acc.df %>%
+  dplyr::select(-c(result, mean_mat:truth))
+
+
+#Summary of difference between post-mean/med and original Omega_k's by norm
+norm_types <- c("1", "F", "2")
+
+omegak_acc.df %>%
+  dplyr::select(-contains(c("dif", "result"))) %>%
+  pivot_longer(
+    cols = -c(subject),
+    names_to  = "precision",
+    values_to = "value" 
+  ) %>%
+  mutate(
+    L1_norm   = map_dbl(.x = value, ~norm(.x, type = "1")),
+    F_norm    = map_dbl(.x = value, ~norm(.x, type = "F")),
+    Spectral_norm = map_dbl(.x = value, ~norm(.x, type = "2")) 
+  ) %>%
+  dplyr::select(-value) %>%
+  # pivot_wider(
+  #   id_cols = "subject",
+  #   names_from = "precision",
+  #   values_from = c(L1_norm:Spectral_norm)
+  # ) %>%
+  group_by(subject) %>%
+  gt_preview()
+```
+
+

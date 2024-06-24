@@ -3,11 +3,11 @@ library(tidyverse)
 library(bayesRCM)
 
 #Fix Omega_0 for all iterations of each sim setting
-n_sim <- 10
+n_sim <- 100
 
 #Set alpha, lambda pairs
-alpha = c(20, 40)
-lambda = c(1/2, 3/4)
+alpha = c(10, 30)
+lambda = c(1/2, 1/4)
 
 #Plot what tau_k looks like
 tau_dist.gg <-
@@ -46,6 +46,7 @@ sim_grid.df <-
     seed_0    = 4,
     seed_k    = 1:n_sim
   ) %>%
+  filter(!(alpha_tau == 10 & lambda_2 == 0.5), !(alpha_tau == 30 & lambda_2 == 0.25)) %>% 
   nest(data = seed_k) %>%
   mutate(setting = 1:nrow(.)) %>%
   unnest(data) %>%
@@ -65,7 +66,7 @@ N          <- nrow(sim_grid.df) #number of total iterations, number of settings 
 N_settings <- N / length(unique(sim_grid.df$seed_k))
 
 for(n in 1:N) {
-  #print(n)
+  print(n)
   #Sim data from bayesRCM::sim_data()
   sim_res <- 
     with(

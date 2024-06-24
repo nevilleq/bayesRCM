@@ -1,0 +1,13 @@
+* using log directory ‘/panfs/jay/groups/1/zhangl4/nevil066/bayes/bayesRCM/..Rcheck’
+* using R version 4.3.0 (2023-04-21)
+* using platform: x86_64-pc-linux-gnu (64-bit)
+* R was compiled by
+    gcc (GCC) 11.3.0
+    GNU Fortran (GCC) 11.3.0
+* running under: Rocky Linux 8.9 (Green Obsidian)
+* using session charset: UTF-8
+* checking for file ‘./DESCRIPTION’ ... ERROR
+Required field missing or empty:
+  ‘Author’
+* DONE
+Status: 1 ERROR

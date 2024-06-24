@@ -6,6 +6,9 @@ library(bayesRCM)
 library(tidyverse)
 library(gt)
 
+#WD
+setwd("/panfs/jay/groups/1/zhangl4/nevil066/bayes/bayesRCM")
+
 #Prelims and functions
 source("./sim/sim_funcs.R")
 
@@ -73,7 +76,8 @@ write <- TRUE
 #for(n in 1:N) {
   
 #Parallelized loop
-n_cores <- parallel::detectCores() - 1
+#n_cores <- parallel::detectCores() - 1
+n_cores <- 96
 cl <- parallel::makeCluster(n_cores)
 on.exit(parallel::stopCluster(cl)) #When done stop cluster
 doParallel::registerDoParallel(cl) #Initialize clusters

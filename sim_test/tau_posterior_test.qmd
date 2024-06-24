@@ -1,0 +1,437 @@
+---
+title: "tau_posterior_test"
+author: "Q"
+format: html
+---
+
+```{r include = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(gt)
+library(MASS)
+library(Rcpp)
+library(RcppArmadillo)
+library(glasso)
+library(GIGrvg)
+#library(bayesRCM)
+#library(doParallel)
+#library(Matrix)
+
+#Controlling figure output in markdown, setting options & root dir
+knitr::opts_chunk$set(
+#  fig.height =   
+  fig.width = 6,
+#  fig.asp = .5,
+  out.width = "90%",
+#  out.height = 
+ fig.align = "center",
+  cache = FALSE,
+  echo  = FALSE,
+  root.dir = rprojroot::find_package_root_file() #not working?
+)
+
+#My Colours (from viridis)
+my_purple <- "#440154FF"
+my_yellow <- "#FDE725FF"
+#Set Theme for ggplot2
+theme_set(theme_minimal() + 
+          theme(plot.title = element_text(hjust = 0.5),
+                plot.subtitle = element_text(hjust = 0.5),
+                legend.position = "bottom"))
+#Set Scientific notation output for knitr
+options(scipen = 999)
+```
+
+# data generation  
+
+```{r}
+#Alpha lambda
+alpha <- 20
+lambda <- 0.5
+
+#Histogram
+(100 - truncdist::rtrunc(spec = "gamma", a = 0, b = 100,
+                  n = 1000, shape = alpha, rate = lambda)) |> hist()
+
+trunc <- c(0, 100)
+#Manual funcs to check valid transformed pdf if trunc (0, 100)
+fx <- function(x) {
+  dgamma(x, shape = alpha, rate = lambda) / (pgamma(trunc[2], alpha, rate = lambda) - pgamma(trunc[1], alpha, lambda))
+}
+
+ftau <- function(x) {
+    dgamma(trunc[2] - x, shape = alpha, rate = lambda) / (pgamma(trunc[2], alpha, rate = lambda) - pgamma(trunc[1], alpha, lambda))
+}
+
+#They both integrate to 1
+trunc <- c(0, 100)
+integrate(fx, trunc[1], trunc[2])
+integrate(ftau, trunc[1], trunc[2])
+
+
+fx <- function(x) {
+  truncdist::dtrunc(spec = "gamma", x = x, a = trunc[1], b = trunc[2], shape = alpha, rate = lambda)
+}
+
+ftau <- function(x) {
+  truncdist::dtrunc(spec = "gamma", x = trunc[2] - x, a = trunc[1], b = trunc[2], shape = alpha, rate = lambda)
+}
+
+
+#They both integrate to 1
+trunc <- c(0, 100)
+integrate(fx, trunc[1], trunc[2])
+integrate(ftau, trunc[1], trunc[2])
+
+#Lower incomplete gamma
+lowinc <- function(x) {}
+
+
+
+#Sim data
+sim_data.df <- 
+  sim_data(subjects = 50, volumes = 1000, rois = 10, alpha_tau = alpha,
+           lambda_2 = lambda, prop_true_con = 0.1, write = FALSE,
+           seed_0   = 4, seed_k = 5, trunc = c(3, 100))
+
+#Data & params
+y           <- sim_data.df$data_list
+true_params <- sim_data.df$true_params
+tau_truth   <- true_params$tau_k
+true_params$alpha_tau -> alpha_truth
+true_params$lambda_2  -> lam2_truth
+true_params$omega_0  -> omega0_truth
+true_params$omega_k  -> omegaK_truth
+
+sigma_0 <- bayesRCM::matinv(omega0_truth)
+```
+
+# $\tau_k$ posterior test  
+
+```{r}
+log_tau_posterior <- function(tau_k, omega_k, sigma_0, alpha_tau, lambda_2, trunc = c(0, 100), m_iter = 100) {
+  #If outside domain return zero
+  if(tau_k < trunc[1] | tau_k > trunc[2]) {
+    return(0)
+  }
+  
+  # #True params
+  # tau_k     <- tau_truth[9]
+  # omega_k   <- omegaK_truth[[9]]
+  # sigma_0   <- bayesRCM::matinv(omega0_truth)
+  # alpha_tau <- alpha_truth
+  # lambda_2  <- lam2_truth
+  # trunc     <- c(3, 100)
+  # m_iter    <- 100
+  
+  #Parameters
+  b   <- max(tau_k, 3)
+  D   <- sigma_0 * tau_k 
+  nu  <- max(trunc[2] - tau_k, trunc[1])
+  #nu  <- tau_k
+  adj <- abs(omega_k) > 0.001 
+  tri_adj <- adj
+  tri_adj[lower.tri(tri_adj, diag = T)] <- 0
+
+  #Log-Gwish (un-normalized)
+  log_gwish <- ((b - 2) / 2) * log(bayesRCM::matdet(omega_k)) - (bayesRCM::mattr(bayesRCM::matprod(D, omega_k)) / 2)
+  #print(paste0("unnormalized log_gwish: ", log_gwish))
+  
+  #Tau post
+  log_tau   <- log(truncdist::dtrunc(spec = "gamma", x = nu, a = trunc[1], b = trunc[2], shape = alpha_tau, rate = lambda_2))
+  
+  #Simulation code
+  #    Tau_k[k] <- trunc[2] - truncdist::rtrunc(spec = "gamma", a = trunc[1], b = trunc[2],
+  #                                             n = 1, shape = alpha_tau, rate = lambda_2)
+  #print(paste0("log_tau: ", log_tau))
+  
+  #G-wish normalizing const. approx
+  log_gwish_norm <- BDgraph::gnorm(tri_adj, b = b, D = D, iter = m_iter)
+  #print(paste0("norm_const: ", log_gwish_norm))
+  
+  
+  #If is -Inf then don't use in posterior (will be inf for both proposal & current)
+  if (is.infinite(log_gwish_norm)) {
+    log_gwish_norm <- 0 #Has no affect on posterior since both constants will be -Inf
+  }
+  
+  #Total G-wish contribution
+  log_gwish_total <- log_gwish - log_gwish_norm
+  #print(paste0("total gwish log lik: ", log_gwish))
+  
+  #Combined pdf 
+  pdf <- log_gwish_total + log_tau
+  #print(paste0("log_post_pdf: ", pdf))
+  
+  # print(
+  #   paste0(
+  #     "gwish: ", round(log_gwish, 3),
+  #     " | const: ", round(log_gwish_norm, 3),
+  #     " | gwish total: ", round(log_gwish_total, 3),
+  #     " | tau: ", round(log_tau, 3),
+  #     "| pdf: ", round(pdf, 3)
+  #   )
+  # )
+  
+  tibble(
+    pdf   = pdf,
+    gwish = log_gwish,
+    const = log_gwish_norm,
+    gwish_total = log_gwish_total,
+    tau = log_tau
+  ) %>%
+  return()
+  
+  #Return pdf
+  #return(pdf)
+}
+
+# max_post_tau(4) -> a
+# a
+# a$ggplot
+```
+
+## Find posterior max & log-pdf components by subject  
+
+```{r}
+#function of true tau
+max_post_tau <- function(subject = 1, m_iter = 100, plot = FALSE) {
+  
+  #True tau & omega_k
+  #Subjects 9 & 44 high truth ~80, mean ~62-67 opt
+  #Subjects 47, 8 (bad) 11 (good?) w low true tau ~40
+  #subject <- 47
+  tau_true <- tau_truth[subject]
+  omegak_true <- omegaK_truth[[subject]]
+  
+  #Grid
+  tau_grid <- 3:100
+  tau_res  <- list()
+  pdf_res  <- vector(mode = "numeric", length = length(tau_grid)) 
+  
+  #Print subject
+  #print(paste0("subject: ", subject))
+  
+  #Loop through taus
+  res.df <-
+    map_df(.x = tau_grid,
+         ~log_tau_posterior(
+           tau_k = .x, 
+           omegak_true,
+           sigma_0, 
+           alpha_truth,
+           lam2_truth, 
+           trunc = c(3, 100),
+           m_iter = m_iter
+          ) %>%
+           mutate(tau_in = .x)
+          )
+  
+  #Max tau
+  max_tau <- which.max(res.df$pdf)
+  max_val <- res.df$pdf[max_tau]
+  
+  # #Diagnostic
+  # diag.df <-
+  # bind_rows(
+  # res.df %>% filter(tau == max(tau)) %>% mutate(max = "tau"),
+  # res.df %>% filter(gwish_total == max(gwish_total)) %>% mutate(max = "gwish"),
+  # res.df %>% filter(pdf == max(pdf)) %>% mutate(max = "pdf"),
+  # res.df %>% filter(tau_in == round(tau_truth[subject], 0)) %>% mutate(max = "truth") 
+  # ) 
+  # 
+  # View(diag.df)
+  
+  # write_rds(diag.df, "./tau_k_work/sub9_diag.rds")
+  # read_rds("./tau_k_work/sub9_diag.rds") %>% View()
+  #Plot of max
+  ggplot <-
+  tibble(
+    x = tau_grid,
+    y = res.df$pdf,
+    max = c(str_c("Tau max: ", as.character(max_tau)), rep(NA, length = length(tau_grid) - 1)),
+    true = c(str_c("Tau true: ", as.character(round(tau_true, 0))), rep(NA, length = length(tau_grid) - 1))
+  ) %>%
+  ggplot(aes(x = x, y = y)) +
+  geom_line() +
+  geom_vline(xintercept = max_tau) +
+  geom_vline(xintercept = tau_true, colour = "red", linetype = 2) +
+  geom_text(aes(x = max_tau - 12, y = -59, label = max)) +
+  geom_text(aes(x = tau_true + 12, y = -59, label = true, colour = "red")) +
+  labs(
+    x = "Tau",
+    y = "Posterior",
+    title = paste0("Log-tau posterior max | Subject: ", subject)
+  )
+  
+  #If plot, display
+  if(plot) {
+    ggplot
+  }
+  
+  #Tibble return
+  return.df <-
+    res.df %>% 
+    slice(max_tau) %>%
+    mutate(
+      tau_true = tau_true,
+      tau_max  = max_tau,
+      ggplot   = list(ggplot)
+    ) %>%
+    dplyr::select(tau_true, tau_max, everything())
+  
+  #Return
+  return(return.df)
+}
+```
+
+```{r}
+#Iterate over subjects given m_iter
+res.df <- 
+  map_df(.x = 1:length(tau_truth), ~max_post_tau(subject = .x, m_iter = 1000, plot = FALSE)) %>%
+  mutate(tau_diff = tau_true - tau_max, subject = 1:nrow(.)) %>%
+  dplyr::select(subject, tau_diff, everything())
+
+res.df %>% dplyr::select(-ggplot) %>% gt()
+
+#Map through different norms for each omegak_truth
+get_norm_df <- function(subject) {
+  
+  #True omegak
+  omegak <- omegaK_truth[[subject]]
+  
+  tibble(
+    subject = subject,
+    L1      = norm(omegak, "1"),
+    F.      = norm(omegak, "F"),
+    Spec.   = norm(omegak, "2")
+  ) %>%
+    return()
+}
+
+#Norms of omega_k
+norm.df <-
+  map_df(.x = 1:length(tau_truth), ~get_norm_df(.x))
+```
+
+```{r}
+#Result df
+res.gg <-
+  res.df %>%
+  mutate(
+    subject = as.factor(subject) %>% fct_reorder(tau_true, .desc = TRUE)
+  ) %>%
+  pivot_longer(
+    cols = c(tau_true, tau_max),
+    names_to = "type",
+    values_to = "value"
+  ) %>%
+  mutate(
+    type = ifelse(str_detect(type, "max"), "Post Max", "True Tau") %>%
+           as.factor() %>%
+          fct_relevel("True Tau"),
+    text = as.character(round(value, 0)),
+  ) %>%
+  ggplot(aes(x = subject, y = value, fill = type)) +
+  geom_bar(position = "dodge", stat = "identity", width = 0.6) +
+  #geom_text(aes(label = text, colour = type), size = 4, vjust = -0.8, hjust = 0.1, position = "dodge") +
+  scale_fill_viridis_d("True vs. Est.") +
+  scale_colour_viridis_d("True vs. Est.")
+
+# 
+# # #Display 
+# res.gg + labs(title = "Prior mean  ~60, tau_k in post -> opt = 40 for all subj.") -> res.gg
+# res.gg2 + labs(title = "Prior mean  ~60, 100-tau_k in post -> opt = 60 for all subj.") -> res.gg2
+# 
+# ggsave("./tau_k_work/tau_40.png", res.gg)
+# ggsave("./tau_k_work/tau_60.png", res.gg2)
+# res60.gg <- res.gg2
+# write_rds(res60.gg, "./tau_k_work/tau_60gg.rds")
+# res60.gg <- read_rds("./tau_k_work/tau_60gg.rds")
+# res60.gg
+```
+
+```{r}
+diag.df <-
+  left_join(norm.df, res.df, by = "subject") %>%
+  dplyr::select(subject:tau_diff) 
+
+diag.df %>%
+  pivot_longer(
+    cols = `L1`:`Spec.`,
+    names_to = "type",
+    values_to = "norm"
+  ) %>%
+  ggplot(aes(x = tau_diff, y = norm, colour = type)) +
+  geom_point(alpha = 0.4) + 
+  geom_line(alpha = 0.7) 
+```
+
+### Bad estimation  
+
+```{r warning = FALSE}
+#Find out which subjects are more than tolerance away
+tolerance <- 4
+
+bad_est.df <-
+  res.df %>%
+  filter(abs(tau_diff) > tolerance) %>%
+  arrange(tau_diff)
+
+bad_est.df %>%
+  dplyr::select(subject:tau_max, gwish:tau, pdf, -c(ggplot)) %>%
+  gt()
+
+bad_est.df %>%
+  pull(ggplot)
+```
+
+```{r}
+diag.df <-
+  left_join(norm.df, bad_est.df, by = "subject") %>%
+  dplyr::select(subject:tau_diff) 
+
+diag.df %>%
+  pivot_longer(
+    cols = `L1`:`Spec.`,
+    names_to = "type",
+    values_to = "norm"
+  ) %>%
+  ggplot(aes(x = tau_diff, y = norm, colour = type)) +
+  geom_point(alpha = 0.4) + 
+  geom_line(alpha = 0.7) 
+```
+
+### Good estimation  
+
+```{r warning = FALSE}
+#Find out which subjects are more than tolerance away
+tolerance <- 4
+
+good_est.df <-
+  res.df %>%
+  filter(abs(tau_diff) <= tolerance) %>%
+  arrange(tau_diff)
+
+good_est.df %>%
+  dplyr::select(subject:tau_max, gwish:tau, pdf, -c(ggplot)) %>%
+  gt()
+
+# good_est.df %>%
+#   pull(ggplot)
+```
+
+```{r}
+diag.df <-
+  left_join(norm.df, good_est.df, by = "subject") %>%
+  dplyr::select(subject:tau_diff) 
+
+diag.df %>%
+  pivot_longer(
+    cols = `L1`:`Spec.`,
+    names_to = "type",
+    values_to = "norm"
+  ) %>%
+  ggplot(aes(x = tau_diff, y = norm, colour = type)) +
+  geom_point(alpha = 0.4) + 
+  geom_line(alpha = 0.7) 
+```

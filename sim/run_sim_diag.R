@@ -6,12 +6,16 @@ library(bayesRCM)
 library(tidyverse)
 library(gt)
 
+#Set wd
+setwd("/panfs/jay/groups/1/zhangl4/nevil066/bayes/bayesRCM")
+
 #Prelims and functions
 source("./sim/sim_funcs.R")
 
 ###############################################################################
 #Read in results (freq & bayes)
 #Read in frequentist
+print("Reading freq sims....")
 in_path  <- "./sim/sim_res/freq/sim_results/"
 in_files <- list.files(in_path)
 
@@ -25,6 +29,7 @@ sim_res_freq.df <-
   dplyr::select(-in_path)
 
 #Read in bayesian results
+print("Reading bayes sims....")
 in_path  <- "./sim/sim_res/bayes/sim_results/"
 in_files <- list.files(in_path)
 
@@ -56,14 +61,15 @@ sim_settings.df <-
   distinct() 
 
 #Display sim settings
-sim_settings.df %>%
-  gt() %>%
-  tab_header("Simulation Settings")
+#sim_settings.df %>%
+#  gt() %>%
+#  tab_header("Simulation Settings")
 
 
 #####################################################################
 # OmegaO Dif Norms and Diagnostics  
 
+print("Omega0 norm box gg")
 # O Norm Viz
 O_norm_box.gg <-
   sim_res.df %>%
@@ -111,6 +117,8 @@ ggsave("./sim/figures/O_norm_box.png", O_norm_box.gg, height = 4, width = 6)
 
 
 # O norm viz ridges/density
+print("Omega0 norm ridges gg")
+
 colour <- "grey80"
 O_norm.gg <-
   sim_res.df %>%
@@ -169,6 +177,8 @@ O_norm.gg
 ggsave("./sim/figures/O_norm_ridges.png", O_norm.gg, height = 6, width = 8)
 
 # O-Diag Viz
+print("Omega0 diag box gg")
+
 O_diag_box.gg <-
   sim_res.df %>%
   dplyr::select(model:seed, O_diag) %>%
@@ -217,6 +227,8 @@ O_diag_box.gg
 ggsave("./sim/figures/O_diag_box.png", O_diag_box.gg, height = 6, width = 8)
 
 # O-diag ridges
+print("Omega0 diag ridges gg")
+
 O_diag_ridges.gg <-
   sim_res.df %>%
   dplyr::select(model:seed, O_diag) %>%
@@ -276,9 +288,12 @@ O_diag_ridges.gg <-
 O_diag_ridges.gg
 ggsave("./sim/figures/O_diag_ridges.png", O_diag_ridges.gg, height = 6, width = 8)
 
+stop("Done for now")
 #################################################################################
 #OmegaK Norm
 # K-norm diagnostics
+print("OmegaK Norms")
+
 k_norm_box <- function(alpha, lambda) {
 k_norm_box.gg <-
   sim_res.df %>%
@@ -339,6 +354,7 @@ k_box_list <- map2(.x = alpha, .y = lambda,
 
 
 # K-norm ridges
+print("OmegaK Norms ridges")
 
 k_norm_ridge <- function(alpha, lambda) {
 
@@ -423,6 +439,8 @@ k_box_list <- map2(.x = alpha, .y = lambda,
 
 #################################################################################
 #OmegaK Diag
+print("OmegaK diag")
+
 # K-norm diagnostics
 k_diag_box <- function(alpha, lambda) {
 k_diag_box.gg <-
@@ -558,6 +576,8 @@ k_diag_list <- map2(.x = alpha, .y = lambda,
 
 #############################################################################################
 #K-tables
+print("OmegaK Norms gt")
+
 omega_k_norm_sum.gt <-
   sim_res.df %>%
   dplyr::select(model:seed, k_diag) %>%
@@ -577,6 +597,7 @@ omega_k_norm_sum.gt <-
   gt() %>%
   tab_header("Omega_K Diff-Norm Summarised over Subjects by Setting")
 
+print("OmegaK Norms")
 omega_k_diag_sum.gt <-
   sim_res.df %>%
   dplyr::select(model:seed, k_diag) %>%
@@ -601,4 +622,4 @@ omega_k_diag_sum.gt <-
   gt() %>%
   tab_header("Omega_K Diagnostics Summarised over Subjects by Setting")
 
-omega_k_diag_sum.gt
+#omega_k_diag_sum.gt

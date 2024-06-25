@@ -8,7 +8,8 @@ src/*.dll
 docs
 results
 theory
-sim/sim_res
+sim/sim_res/bayes/model_results
+sim/sim_res/freq/model_results
 sim/testing
 sim/truth
 data

@@ -20,7 +20,7 @@ dir.create("./sim/sim_res/bayes/model_results", showWarnings = FALSE)
 dir.create("./sim/sim_res/bayes/sim_results", showWarnings = FALSE)
 dir.create("./sim/sim_res/bayes/post_results", showWarnings = FALSE)
 
-
+print("Data read")
 
 #file_path to read in data
 in_path <- "./sim/sim_data/"
@@ -59,7 +59,7 @@ sim_data.df %>%
 #For testing
 sim_data.df$data_list[[1]] -> y
 
-#######################################################################################
+######################################################################
 #1. Model Fits
 
 #Settings for sim results
@@ -67,16 +67,20 @@ N <- nrow(sim_data.df)
 threshold <- 0.001
 #n_cores   <- parallel::detectCores() - 1
 #n_cores   <- 7
-n_cores   <- 50
+n_cores   <- 20
 
 #Storage lists
 #res_list_bayes <- vector(mode = "list", length = N)
-n <- 1
+#n <- which(sim_data.df$setting == 3 & sim_data.df$seed == 302)
+n_start <- 285
+n_end   <- N
 write <- TRUE
-#N <- 2
+#N <- 3
+
+print(sprintf("Starting sims %i to %i", n_start, n_end))
 
 #Loop to fit bayesRCM::rcm
-for(n in 1:N) {
+for(n in n_start:n_end) {
 
 #Parallelized loop
 #n_cores <- parallel::detectCores() - 1
@@ -91,6 +95,7 @@ for(n in 1:N) {
 #   .packages = c("bayesRCM", "glasso", "stringr") #Packages
 #   # .noexport = c("graph_update","gwish_ij_update", "rgwish") #Functions necessary to export
 # ) %dopar% {
+  #n <- which(sim_data.df$setting == 3 & sim_data.df$seed == 302)
   print(n)
   #Unique name for directory to store figs
   name <- 
@@ -108,9 +113,36 @@ for(n in 1:N) {
   #Fit model (5000 post samps, 1000 burn)
   # n_samples = 100; n_burn = 10; n_cores = n_cores; n_updates = 5;
   # result <- bayesRCM::rcm(y, n_samples = 100, n_burn = 10, n_cores = n_cores, n_updates = 1)
-    result <- rcm(y, n_samples = 4000, n_burn = 1000, n_cores = n_cores, n_updates = 10)
-    write_rds(result, str_c("./sim/sim_res/bayes/model_results/", name, ".rds"))
+   # result <- rcm(y, n_samples = 4000, n_burn = 1000, n_cores = n_cores, n_updates = 10)
+   # write_rds(result, str_c("./sim/sim_res/bayes/model_results/", name, ".rds"))
     # result <- read_rds("./sim/sim_res/bayes/model_results/setting1_seed1.rds")
+    result <- tryCatch({
+      #if (n != 2){
+      #  bayesRCM::rcm(y, n_samples = 1000, n_burn = 100, n_cores = n_cores, n_updates = 10)
+      #} else {
+      #  1 = 2
+      #}
+      rcm(y, n_samples = 4000, n_burn = 1000, n_cores = n_cores, n_updates = 10)
+      #return(result)
+      }, error = function(e){
+        cat("Error in bayesRCM::rcm(), likely in subject updates", "\n", conditionMessage(e), "\n")
+      })
+       #result <- bayesRCM::rcm(y, n_samples = 100, n_burn = 10, n_cores = n_cores, n_updates = 1)
+      # result <- rcm(y, n_samples = 4000, n_burn = 1000, n_cores = n_cores, n_updates = 10)
+        
+        #Write out model result
+        write_rds(result, str_c("./sim/sim_res/bayes/model_results/", name, ".rds"))
+        # result <- read_rds("./sim/sim_res/bayes/model_results/setting1_seed1.rds")
+        
+        if(is.null(result)) {
+          res_list_bayes <- list(omega_k1 = NULL, adj_k1 = NULL, omega_01 = NULL,
+                                 omega_k2 = NULL, adj_k2 = NULL, omega_02 = NULL)
+          if(write){
+            readr::write_rds(res_list_bayes, str_c("./sim/sim_res/bayes/post_results/", name,".rds"))
+          }
+          print("Skipping done.")
+          next()
+    } else {
     n_iter <- ncol(result$omega_0)
     
     #Grab posterior median and mean for Omega_K
@@ -158,6 +190,8 @@ for(n in 1:N) {
     if(write){
         readr::write_rds(res_list_bayes, str_c("./sim/sim_res/bayes/post_results/", name,".rds"))
     }
+  }
+  print("Done.")
 } #End loop
 
 #####################################################################################

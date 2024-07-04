@@ -4,11 +4,11 @@ my_yellow <- "#FDE725FF"
 
 #Set Theme for ggplot2
 theme_set(theme_minimal() + 
-            theme(plot.title = element_text(hjust = 0.5),
-                  plot.subtitle = element_text(hjust = 0.5),
-                  legend.position = "bottom",
-                  plot.background  = element_rect(fill = "white", colour = "white")
-            )
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "bottom",
+        plot.background  = element_rect(fill = "white", colour = "white")
+  )
 )
 
 #function for tidy date
@@ -45,12 +45,22 @@ get_bin_diag_k <- function(pred_list, truth_list) {
   diagnostic.df <- 
     map_df(.x = conf_list, ~as_tibble(as.data.frame(t(.x$overall)))) %>%
     janitor::clean_names() %>%
+    rename(Accuracy = accuracy) %>%
     mutate(
       subject = str_c("Sub. ", 1:length(pred_list)), 
-      mcc     = map2_dbl(.x = pred_up_tri, .y = truth_up_tri,
-                         ~mltools::mcc(preds = .x, actuals = .y))
+      MCC     = map2_dbl(.x = pred_up_tri, .y = truth_up_tri,
+                         ~mltools::mcc(preds = .x, actuals = .y)),
+      tp      = map_dbl(.x = conf_list, ~.x$table[2,2]),
+      fp      = map_dbl(.x = conf_list, ~.x$table[2,1]),
+      tn      = map_dbl(.x = conf_list, ~.x$table[1,1]),
+      fn      = map_dbl(.x = conf_list, ~.x$table[1,2]),
+      TPR     = map2_dbl(.x = tp, .y = fn, ~.x / (.x + .y)), #tp / (tp + fn),
+      FPR     = map2_dbl(.x = fp, .y = tn, ~.x / (.x + .y)), #fp / (fp + tn),
+      TNR     = map2_dbl(.x = tn, .y = fp, ~.x / (.x + .y)), #tn / (tn + fp),
+      FNR     = map2_dbl(.x = fn, .y = tp, ~.x / (.x + .y)), #fn / (fn + tp),
+      FDR     = map2_dbl(.x = fp, .y = tp, ~.x / (.x + .y))  #fp / (fp + tp)
     ) %>%
-    dplyr::select(subject, mcc, everything())
+    dplyr::select(Accuracy, MCC, TPR:FDR)
   
   #Return diag .df to unnest
   return(diagnostic.df)
@@ -70,10 +80,20 @@ get_bin_diag_0 <- function(omega, truth) {
   diagnostic.df <- 
     as_tibble(as.data.frame(t(conf$overall))) %>%
     janitor::clean_names() %>%
+    rename(Accuracy = accuracy) %>%
     mutate(
-      mcc = mltools::mcc(preds = pred_up_tri, actuals = truth_up_tri)
+      MCC = mltools::mcc(preds = pred_up_tri, actuals = truth_up_tri),
+      tp  = conf$table[2,2],
+      fp  = conf$table[2,1],
+      tn  = conf$table[1,1],
+      fn  = conf$table[1,2],
+      TPR = tp / (tp + fn),
+      FPR = fp / (fp + tn),
+      TNR = tn / (tn + fp),
+      FNR = fn / (fn + tp),
+      FDR = fp / (fp + tp)
     ) %>%
-    dplyr::select(mcc, everything())
+    dplyr::select(Accuracy, MCC, TPR:FDR)
   
   return(diagnostic.df)
 }

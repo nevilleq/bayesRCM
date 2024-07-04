@@ -28,7 +28,7 @@ in_list <- list.files("./sim/sim_data/", pattern = "setting")
 #Read in sim settings
 in_grid <- list.files("./sim/sim_data/", pattern = "grid")
 sim_settings.df <- read_rds(str_c(in_path, in_grid, sep = "/"))
-
+print("Data read....")
 #Read in all sim data
 sim_data.df <-
   tibble(
@@ -106,13 +106,18 @@ sim_res.df <-
 
 #####################################################################################
 #3. Model diagnostics  
+n_start <- 1
 N <- nrow(sim_res.df)
+n_start <- 2152
+n_end <- N
 
-#Loop through and grab model diagnostics (Diff Norms, MCC, Accuracy, etc.)
-for(n in 1:N) {
+print("Starting model diagnostic processing...")
+
+for(n in n_start:n_end) {
   
-  #Display iteration
-  print(n)
+  #Print
+  print("Processing file:")
+  print(sprintf("%i/%i", n, N))
   
   #Unique name for directory to store figs
   name <- 

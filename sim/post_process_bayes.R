@@ -65,7 +65,7 @@ sim_res.df <-
 #3. Model diagnostics  
 n_start <- 1
 N <- nrow(sim_res.df)
-n_start <- 203
+n_start <- 332
 n_end <- N
 
 for(n in n_start:n_end) {

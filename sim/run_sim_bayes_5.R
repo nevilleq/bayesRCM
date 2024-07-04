@@ -72,7 +72,7 @@ n_cores   <- 50
 #Storage lists
 #res_list_bayes <- vector(mode = "list", length = N)
 #n <- which(sim_data.df$setting == 3 & sim_data.df$seed == 302)
-n_start <- 401
+n_start <- 475
 n_end   <- 500
 write <- TRUE
 #N <- 3

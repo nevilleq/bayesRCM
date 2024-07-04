@@ -8,3 +8,39 @@
 ✖ dplyr::filter() masks stats::filter()
 ✖ dplyr::lag()    masks stats::lag()
 ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+Registered S3 methods overwritten by 'lava':
+  method    from   
+  plot.sim  BDgraph
+  print.sim BDgraph
+Error in `mutate()`:
+ℹ In argument: `diff_k1 = map(.x = omega_k1, ~get_diff(.x, Omega_k))`.
+Caused by error in `map()`:
+ℹ In index: 1.
+Caused by error in `map2()`:
+! Can't recycle `.x` (size 0) to match `.y` (size 20).
+Backtrace:
+     ▆
+  1. ├─... %>% ...
+  2. ├─dplyr::select(...)
+  3. ├─dplyr::mutate(...)
+  4. ├─dplyr:::mutate.data.frame(...)
+  5. │ └─dplyr:::mutate_cols(.data, dplyr_quosures(...), by)
+  6. │   ├─base::withCallingHandlers(...)
+  7. │   └─dplyr:::mutate_col(dots[[i]], data, mask, new_columns)
+  8. │     └─mask$eval_all_mutate(quo)
+  9. │       └─dplyr (local) eval()
+ 10. ├─purrr::map(.x = omega_k1, ~get_diff(.x, Omega_k))
+ 11. │ └─purrr:::map_("list", .x, .f, ..., .progress = .progress)
+ 12. │   ├─purrr:::with_indexed_errors(...)
+ 13. │   │ └─base::withCallingHandlers(...)
+ 14. │   ├─purrr:::call_with_cleanup(...)
+ 15. │   └─.f(.x[[i]], ...)
+ 16. │     └─global get_diff(.x, Omega_k)
+ 17. │       └─purrr::map2(.x = x_list, .y = y_list, ~.y - .x)
+ 18. │         └─purrr:::map2_("list", .x, .y, .f, ..., .progress = .progress)
+ 19. │           └─vctrs::vec_size_common(.x = .x, .y = .y, .call = .purrr_error_call)
+ 20. └─vctrs::stop_incompatible_size(...)
+ 21.   └─vctrs:::stop_incompatible(...)
+ 22.     └─vctrs:::stop_vctrs(...)
+ 23.       └─rlang::abort(message, class = c(class, "vctrs_error"), ..., call = call)
+Execution halted

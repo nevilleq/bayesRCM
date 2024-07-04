@@ -8,3 +8,4 @@
 ✖ dplyr::filter() masks stats::filter()
 ✖ dplyr::lag()    masks stats::lag()
 ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+slurmstepd: error: *** JOB 19301260 ON acn32 CANCELLED AT 2024-06-29T16:11:16 DUE TO TIME LIMIT ***

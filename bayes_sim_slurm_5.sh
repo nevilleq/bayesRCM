@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #SBATCH -A zhangl4
 #SBATCH -p agsmall
-#SBATCH --time=24:00:00
+#SBATCH --time=7:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=50
 #SBATCH --mem-per-cpu=2500mb

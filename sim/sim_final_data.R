@@ -1,6 +1,7 @@
 #Load libraries
 library(tidyverse)
 library(bayesRCM)
+library(latex2exp)
 
 #Fix Omega_0 for all iterations of each sim setting
 n_sim <- 100
@@ -10,6 +11,7 @@ alpha = c(10, 30)
 lambda = c(1/2, 1/4)
 
 #Plot what tau_k looks like
+set.seed(44)
 tau_dist.gg <-
   expand_grid(
     alpha_tau = alpha,
@@ -17,21 +19,52 @@ tau_dist.gg <-
   ) %>%
   mutate(
     setting      = 1:nrow(.),
-    setting      = str_c("alpha ", alpha_tau, ", lambda ", lambda_2) %>%
+    setting      = str_c("alpha=", alpha_tau, ", lambda=", lambda_2) %>%
                    as.factor() %>%
                    fct_reorder(setting),
     distribution = map2(.x = alpha_tau, .y = lambda_2,
-                        ~truncdist::rtrunc(spec = "gamma", a = 0, b = 100,
+                        ~100 - truncdist::rtrunc(spec = "gamma", a = 0, b = 100,
                                            n = 1000, shape = .x, rate = .y)),
   ) %>%
   unnest(distribution) %>%
-  ggplot(aes(x = distribution)) +
-  geom_histogram(binwidth = 2) +
-  facet_wrap(~setting, scales = "free_y") +
-  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, by = 25))
+  filter(!(alpha_tau == 10 & lambda_2 == 0.5), !(alpha_tau == 30 & lambda_2 == 0.25)) %>% 
+  mutate(
+    type = ifelse(setting == "alpha=10, lambda=0.25", 
+                     "Fewer Outliers - Lower Sub. Variability",
+                     "More Outliers - Higher Sub. Variability") %>%
+           as_factor() %>%
+           fct_reorder(., distribution, mean, .desc = TRUE)
+  ) %>%
+  ggplot(aes(x = distribution, y = after_stat(density), fill = setting, colour = setting)) +
+  geom_density(alpha = 0.36, adjust = 1.6) +
+  geom_histogram(binwidth = 2, alpha = 0.2) +
+  facet_wrap(~type, scales = "fixed") +
+  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, by = 25)) +
+  labs(
+    y = "Density", 
+    x = " ",
+    title = TeX(r'(Simulated Distribution of $\tau_k \sim 100 - \Gamma_{(0, 100)}(\alpha_\tau, \lambda_2)$)'),
+#    subtitle = "Subject Specific D.F. & Regularization"
+  ) +
+  scale_fill_viridis_d(" ") +
+  scale_colour_viridis_d(" ") +
+  theme_minimal() +
+  theme(
+    strip.placement  = "outside",
+    legend.position = "bottom",
+    plot.background = element_rect(fill = "white", colour = NA),
+    plot.title      = element_text(hjust = 0.5, margin = margin(t = 0, r = 0, b = 5, l = 0)),
+    #axis.text.x     = element_text(angle = 45, vjust = 1, hjust = 1),
+    panel.spacing.x = unit(0.4, "lines"),
+    panel.spacing.y = unit(1.2, "lines"),
+    strip.text.x    = element_text(margin = margin(t = 0, r = 0, b = 10, l = 0)),
+    plot.subtitle   = ggtext::element_markdown(hjust = 0.5)
+  )
 
 #Display
 tau_dist.gg
+
+ggsave("./sim/figures/tau_dist.png", tau_dist.gg, height = 4, width = 6, dpi = 300)
 
 #Grid of simulation settings (length 10 for now)
 sim_grid.df <-              

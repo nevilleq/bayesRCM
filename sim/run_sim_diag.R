@@ -66,10 +66,10 @@ sim_settings.df <-
 #  tab_header("Simulation Settings")
 
 mod_order <- c("bayesRCM", "rcm", "jgl", "iglasso")
-diag_order <- c("Accuracy", "MCC", "TPR", "TNR", "FDR")
+diag_order <- c("MCC", "TPR", "TNR", "FDR")
 norm_order <- c("Spectral", "L1", "Frobenius")
 height <- 6
-width <- 10
+width <- 8
 
 
 #####################################################################
@@ -197,7 +197,7 @@ O_norm.gg <-
   )
 
 O_norm.gg
-ggsave("./sim/figures/O_norm_ridges.png", O_norm.gg, height = 6, width = 10)
+ggsave("./sim/figures/O_norm_ridges.png", O_norm.gg, height = 6, width = 8)
 
 # O-Diag Viz
 print("Omega0 diag box gg")
@@ -211,9 +211,9 @@ O_diag_box.gg <-
     setting = as.factor(str_c("Setting ", setting)) %>%
       fct_reorder(setting, .desc = FALSE)
   ) %>%
-  dplyr::select(model, setting, Accuracy, FDR, TPR, TNR, MCC) %>%
+  dplyr::select(model, setting, FDR, TPR, TNR, MCC) %>%
   pivot_longer(
-    cols = Accuracy:MCC,
+    cols = FDR:MCC,
     names_to = "type",
     values_to = "stat"
   ) %>%
@@ -228,10 +228,9 @@ O_diag_box.gg <-
       as_factor() %>%
       fct_relevel("Fewer Outliers")
   ) %>%
-  group_by(type) %>%
   mutate(model = as.factor(model) %>% fct_relevel(mod_order)) %>%
   ggplot(aes(x = type, y = stat, colour = model, fill = model)) +
-  geom_boxplot(colour = "grey80", alpha = 0.8, size = 0.4, width = 1) +
+  geom_boxplot(colour = "grey80", alpha = 0.8, size = 0.4, width = 0.76) +
   labs(
     x = "Binary Diagnostics of Group Graph/Network",
     y = "Score",
@@ -401,14 +400,14 @@ k_diag_box.gg <-
   dplyr::select(everything(), -c(FPR, FNR)) %>% 
   summarise(
     across(
-      .cols = Accuracy:FDR,
+      .cols = MCC:FDR,
       ~mean(.x, na.rm = TRUE),
       .names = "{.col}"
     ),
     .groups = "drop"
   ) %>%
   pivot_longer(
-    cols = Accuracy:FDR,
+    cols = MCC:FDR,
     names_to = "type",
     values_to = "stat"
   ) %>%
@@ -423,10 +422,9 @@ k_diag_box.gg <-
       as_factor() %>%
       fct_relevel("Fewer Outliers")
   ) %>%
-  group_by(type) %>%
   mutate(model = as.factor(model) %>% fct_relevel(mod_order)) %>%
   ggplot(aes(x = type, y = stat, colour = model, fill = model)) +
-  geom_boxplot(colour = "grey80", alpha = 0.8, size = 0.4, width = 0.8) +
+  geom_boxplot(colour = "grey80", alpha = 0.8, size = 0.4, width = 0.76) +
   labs(
     x = "Binary Diagnostics of Group Graph/Network",
     y = "Avg. Score Across Subjects",
@@ -498,7 +496,7 @@ O_diag.df <-
   unnest(O_diag) %>%
   dplyr::select(-seed) %>%
   mutate(setting = str_c("Setting ", setting)) %>%
-  dplyr::select(model, setting, Accuracy, FDR, TPR, TNR, MCC) %>%
+  dplyr::select(model, setting, FDR, TPR, TNR, MCC) %>%
   group_by(model, setting) %>%
   summarise(
     across(
@@ -519,8 +517,8 @@ O_diag.df <-
       fct_relevel("Fewer Outliers")
   ) %>%
   mutate(model = as.factor(model) %>% fct_relevel(mod_order)) %>%
-  dplyr::select(subjects, volumes, outliers, model, Accuracy, MCC, TPR, TNR, FDR) %>%
-  rename(ACC = Accuracy) %>%
+  dplyr::select(subjects, volumes, outliers, model, MCC, TPR, TNR, FDR) %>%
+#  rename(ACC = Accuracy) %>%
   rename_with(.cols = where(is.numeric), ~str_c("G", .x))
 
 k_norm.df <-
@@ -561,7 +559,7 @@ k_diag.df <-
   dplyr::select(everything(), -c(FPR, FNR)) %>% 
   summarise(
     across(
-      .cols = Accuracy:FDR,
+      .cols = MCC:FDR,
       ~mean(.x, na.rm = TRUE),
       .names = "{.col}"
     ),
@@ -578,8 +576,8 @@ k_diag.df <-
       fct_relevel("Fewer Outliers")
   ) %>%
   mutate(model = as.factor(model) %>% fct_relevel(mod_order)) %>%
-  dplyr::select(subjects, volumes, outliers, model, Accuracy, MCC, TPR, TNR, FDR) %>%
-  rename(ACC = Accuracy) %>%
+  dplyr::select(subjects, volumes, outliers, model, MCC, TPR, TNR, FDR) %>%
+#  rename(ACC = Accuracy) %>%
   rename_with(.cols = where(is.numeric), ~str_c("I", .x))
 
 #######################################################
@@ -606,6 +604,11 @@ table.df <-
     by = c("subjects", "volumes", "outliers", "model")
   )
 
+max_cols <- c("MCC", "TPR", "TNR")
+min_cols <- c("FDR", "L1", "FL2")
+max_to_bold <- c(str_c("G", max_cols), str_c("I", max_cols))
+min_to_bold <- c(str_c("G", min_cols), str_c("I", min_cols))
+
 #20 Sub
 table_20sub.gt <-
   table.df %>%
@@ -617,30 +620,55 @@ table_20sub.gt <-
       ~round(.x, 3)
     )
   ) %>%
-  rename(` ` = model) %>%
   group_by(volumes, outliers) %>%
+  mutate(
+    across(
+      .cols = all_of(min_to_bold),
+      ~ifelse(.x == min(.x), str_c("<b>", .x, "</b>"), as.character(.x))
+    )
+  ) %>%
+  mutate(
+    across(
+      .cols = all_of(max_to_bold),
+      ~ifelse(.x == max(.x), str_c("<b>", .x, "</b>"), as.character(.x))
+    )
+  ) %>%
+  mutate(
+    across(
+      .cols = -c(model),
+      ~ifelse(.x == "<b>0</b>", "<b>0.000</b>", .x)
+    )
+  ) %>%
+  mutate(
+    across(
+      .cols = -c(model),
+      ~ifelse(.x == "<b>1</b>", "<b>1.000</b>", .x)
+    )
+  ) %>%
+  rename(` ` = model) %>%
   gt() %>%
-  data_color(
-    columns = GACC:IFDR,
-    colors = scales::col_numeric(
-      palette = c("blue", "white", "red"),
-      domain = c(-0.05, 1.05))
-  ) %>%
-  data_color(
-    columns = GL1:GFL2,
-    colors = scales::col_numeric(
-      palette = c("blue", "white"),
-      domain = c(0.3, 1))
-  ) %>%
-  data_color(
-    columns = IL1:IFL2,
-    colors = scales::col_numeric(
-      palette = c("blue", "white"),
-      domain = c(0.4, 2))
-  ) %>%
+  fmt_markdown(columns = everything()) %>%
+  # data_color(
+  #   columns = GMCC:IFDR,
+  #   colors = scales::col_numeric(
+  #     palette = c("blue", "white", "red"),
+  #     domain = c(-0.05, 1.05))
+  # ) %>%
+  # data_color(
+  #   columns = GL1:GFL2,
+  #   colors = scales::col_numeric(
+  #     palette = c("blue", "white"),
+  #     domain = c(0.3, 1))
+  # ) %>%
+  # data_color(
+  #   columns = IL1:IFL2,
+  #   colors = scales::col_numeric(
+  #     palette = c("blue", "white"),
+  #     domain = c(0.4, 2))
+  # ) %>%
   tab_spanner(
     label = md("__Graph Network Diagnostics__"),
-    columns = GACC:IFDR
+    columns = GMCC:IFDR
   ) %>%
   tab_spanner(
     label = md("__Precision Matrix Estimation__"),
@@ -649,13 +677,13 @@ table_20sub.gt <-
   tab_footnote(
     footnote = gt::html("G: Group, I: Individual"),
     locations = cells_column_labels(
-      columns = c(GACC, GL1)
+      columns = c(GMCC, GL1)
     )
   ) %>%
   tab_footnote(
-    footnote = gt::html("ACC: Accuracy, MCC: Mathews Correlation Coef., TPR: True Positive, TNR: True Negative, FDR: False Discovery"),
+    footnote = gt::html("MCC: Mathews Correlation Coef., TPR: True Positive, TNR: True Negative, FDR: False Discovery"),
     locations = cells_column_labels(
-      columns = GACC
+      columns = GMCC
     )
   ) %>%
   tab_footnote(
@@ -664,6 +692,12 @@ table_20sub.gt <-
       columns = GL1
     )
   )
+
+table_20sub.gt
+gtsave(table_20sub.gt, "./sim/figures/table_20.png", expand = 20)
+
+
+#50 sub
 
 
 table_50sub.gt <-
@@ -676,30 +710,55 @@ table_50sub.gt <-
       ~round(.x, 3)
     )
   ) %>%
-  rename(` ` = model) %>%
   group_by(volumes, outliers) %>%
+  mutate(
+    across(
+      .cols = all_of(min_to_bold),
+      ~ifelse(.x == min(.x), str_c("<b>", .x, "</b>"), as.character(.x))
+    )
+  ) %>%
+  mutate(
+    across(
+      .cols = all_of(max_to_bold),
+      ~ifelse(.x == max(.x), str_c("<b>", .x, "</b>"), as.character(.x))
+    )
+  ) %>%
+  mutate(
+    across(
+      .cols = -c(model),
+      ~ifelse(.x == "<b>0</b>", "<b>0.000</b>", .x)
+    )
+  ) %>%
+  mutate(
+    across(
+      .cols = -c(model),
+      ~ifelse(.x == "<b>1</b>", "<b>1.000</b>", .x)
+    )
+  ) %>%
+  rename(` ` = model) %>%
   gt() %>%
-  data_color(
-    columns = GACC:IFDR,
-    colors = scales::col_numeric(
-      palette = c("blue", "white", "red"),
-      domain = c(-0.05, 1.05))
-  ) %>%
-  data_color(
-    columns = GL1:GFL2,
-    colors = scales::col_numeric(
-      palette = c("blue", "white"),
-      domain = c(0.25, 1))
-  ) %>%
-  data_color(
-    columns = IL1:IFL2,
-    colors = scales::col_numeric(
-      palette = c("blue", "white"),
-      domain = c(0.4, 2))
-  ) %>%
+  fmt_markdown(columns = everything()) %>%
+  # data_color(
+  #   columns = GMCC:IFDR,
+  #   colors = scales::col_numeric(
+  #     palette = c("blue", "white", "red"),
+  #     domain = c(-0.05, 1.05))
+  # ) %>%
+  # data_color(
+  #   columns = GL1:GFL2,
+  #   colors = scales::col_numeric(
+  #     palette = c("blue", "white"),
+  #     domain = c(0.25, 1))
+  # ) %>%
+  # data_color(
+  #   columns = IL1:IFL2,
+  #   colors = scales::col_numeric(
+  #     palette = c("blue", "white"),
+  #     domain = c(0.4, 2))
+  # ) %>%
   tab_spanner(
     label = md("__Graph Network Diagnostics__"),
-    columns = GACC:IFDR
+    columns = GMCC:IFDR
   ) %>%
   tab_spanner(
     label = md("__Precision Matrix Estimation__"),
@@ -708,13 +767,13 @@ table_50sub.gt <-
   tab_footnote(
     footnote = gt::html("G: Group, I: Individual"),
     locations = cells_column_labels(
-      columns = c(GACC, GL1)
+      columns = c(GMCC, GL1)
     )
   ) %>%
   tab_footnote(
-    footnote = gt::html("ACC: Accuracy, MCC: Mathews Correlation Coef., TPR: True Positive, TNR: True Negative, FDR: False Discovery"),
+    footnote = gt::html("MCC: Mathews Correlation Coef., TPR: True Positive, TNR: True Negative, FDR: False Discovery"),
     locations = cells_column_labels(
-      columns = GACC
+      columns = GMCC
     )
   ) %>%
   tab_footnote(
@@ -723,7 +782,6 @@ table_50sub.gt <-
       columns = GL1
     )
   )
-
-gtsave(table_20sub.gt, "./sim/figures/table_20.png", expand = 20)
+table_50sub.gt
 gtsave(table_50sub.gt, "./sim/figures/table_50.png", expand = 20)
 

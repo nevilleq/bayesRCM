@@ -7,7 +7,7 @@ library(tidyverse)
 library(gt)
 
 #WD
-setwd("/panfs/jay/groups/1/zhangl4/nevil066/bayes/bayesRCM")
+setwd("~/dissertation/bayesRCM/")
 
 #Prelims and functions
 source("./sim/sim_funcs.R")
@@ -80,7 +80,7 @@ write <- TRUE
   
 #Parallelized loop
 #n_cores <- parallel::detectCores() - 1
-n_cores <- 20
+n_cores <- 50
 cl <- parallel::makeCluster(n_cores)
 on.exit(parallel::stopCluster(cl)) #When done stop cluster
 doParallel::registerDoParallel(cl) #Initialize clusters
@@ -114,11 +114,21 @@ K <- length(y)    #Subjects
 #Tuning
 lambda_grid <- 
   tidyr::expand_grid(
-    lam1 = c(0.00001, 0.0001, 0.001, 0.01, 0.1, 1),
-    lam2 = c(1, 5, 10, 20:100),
+    lam1 = c(0.0001, 0.001, 0.01, 0.1, 1, 5),
+    lam2 = c(0.1, 0.5, 1, 5, 10, 20, 50, 70, 100),
     lam3 = c(0.0001, 0.001, 0.01, 0.05, 0.1, 1)
   )
   
+# A tibble: 6 × 3
+#    lam1  lam2  lam3
+#   <dbl> <dbl> <dbl>
+#1 0.0001    10  0.05
+#2 0.0001    10  0.05
+#3 0.0001    10  0.05
+#4 0.0001    10  0.05
+#5 0.0001    10  0.05
+#6 0.0001    20  0.01
+
   
   print("N tuning settings: ")
   print(nrow(lambda_grid))

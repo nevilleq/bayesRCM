@@ -426,7 +426,7 @@ k_diag_box.gg <-
   ggplot(aes(x = type, y = stat, colour = model, fill = model)) +
   geom_boxplot(colour = "grey80", alpha = 0.8, size = 0.4, width = 0.76) +
   labs(
-    x = "Binary Diagnostics of Group Graph/Network",
+    x = "Binary Diagnostics of Individual Graph/Networks",
     y = "Avg. Score Across Subjects",
   #  title = "Simulation Diagnostics: Omega_k",
   #  subtitle = sprintf("Alpha = %g, Lambda2 = %g", alpha, lambda),
@@ -450,7 +450,7 @@ k_diag_box.gg <-
   )
 
   k_diag_box.gg
-  ggsave("./sim/figures/k_diag_box.png", k_diag_box.gg, height = 8, width = 12, dpi = 300)
+  ggsave("./sim/figures/k_diag_box.png", k_diag_box.gg, height = height, width = width, dpi = 300)
 
 
 #############################################################################################
@@ -647,25 +647,7 @@ table_20sub.gt <-
   ) %>%
   rename(` ` = model) %>%
   gt() %>%
-  fmt_markdown(columns = everything()) %>%
-  # data_color(
-  #   columns = GMCC:IFDR,
-  #   colors = scales::col_numeric(
-  #     palette = c("blue", "white", "red"),
-  #     domain = c(-0.05, 1.05))
-  # ) %>%
-  # data_color(
-  #   columns = GL1:GFL2,
-  #   colors = scales::col_numeric(
-  #     palette = c("blue", "white"),
-  #     domain = c(0.3, 1))
-  # ) %>%
-  # data_color(
-  #   columns = IL1:IFL2,
-  #   colors = scales::col_numeric(
-  #     palette = c("blue", "white"),
-  #     domain = c(0.4, 2))
-  # ) %>%
+  fmt_markdown(columns = -c(` `)) %>%
   tab_spanner(
     label = md("__Graph Network Diagnostics__"),
     columns = GMCC:IFDR
@@ -737,7 +719,7 @@ table_50sub.gt <-
   ) %>%
   rename(` ` = model) %>%
   gt() %>%
-  fmt_markdown(columns = everything()) %>%
+  fmt_markdown(columns = -c(` `)) %>%
   # data_color(
   #   columns = GMCC:IFDR,
   #   colors = scales::col_numeric(

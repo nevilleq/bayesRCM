@@ -465,6 +465,7 @@ result$lambda3_res %>%
   apply(., 1, mean) -> lam_2_post_est
 
 #post_mode  <- apply(result$omega_0, 1, stat_mode) # Need a user defined mode func if so
+Omega_0 <- sim_res$true_params$omega_0
 omega_true <- Omega_0[upper.tri(Omega_0, diag = TRUE)]
 
 #Mean absolute error - raw difference
@@ -472,11 +473,12 @@ map(.x = list(post_mean, post_med), ~summary(.x - omega_true))
 map(.x = list(post_mean, post_med), ~max(abs(.x - omega_true)))
 
 ##Variance/Sigma
+Sigma_0 <- matinv(Omega_0)
 post_omega0 <- Sigma_0 #Just for correct size, going to overwrite
 post_omega0[upper.tri(post_omega0, diag = TRUE)]  <- post_mean
 post_omega0 <- as.matrix(Matrix::forceSymmetric(post_omega0, uplo = "U"))
 
-post_sigma0 <- solve(post_omega0) #Sigma posterior est.
+post_sigma0 <- matinv(post_omega0) #Sigma posterior est.
 sigma0_est  <- post_sigma0[upper.tri(post_sigma0, diag = TRUE)]
 sigma_true  <- Sigma_0[upper.tri(Sigma_0, diag = TRUE)]
 
@@ -501,7 +503,7 @@ tibble(
   `Omega Diff.` = map_dbl(.x = norm_types, ~norm(post_omega0 - Omega_0, type = .x))
 ) %>%
   group_by(`Norm Type`) %>%
-  gt() 
+  gt::gt() 
 ```
 
 ### 2.2.2 $\tau_k$ with fixed $\Omega_0, \Omega_k/G_k$, $\alpha_tau$, $\lambda_2$  
@@ -543,11 +545,12 @@ sim_data.df %>%
 
 #For testing
    y = sim_data.df$data_list[[1]]; priors = NULL; n_samples = 1000; n_burn = 500; n_cores = 7; n_updates = 5;
-   sim_data.df$true_params[[1]]$tau_k -> tau_truth;
-   sim_data.df$true_params[[1]]$alpha_tau -> alpha_truth;
-   sim_data.df$true_params[[1]]$lambda_2  -> lam2_truth;
-   sim_data.df$true_params[[1]]$omega_0  -> omega0_truth;
-   sim_data.df$true_params[[1]]$omega_k  -> omegaK_truth;
+   sim_data.df <- sim_res
+   sim_data.df$true_params$tau_k -> tau_truth;
+   sim_data.df$true_params$alpha_tau -> alpha_truth;
+   sim_data.df$true_params$lambda_2  -> lam2_truth;
+   sim_data.df$true_params$omega_0  -> omega0_truth;
+   sim_data.df$true_params$omega_k  -> omegaK_truth;
 ```
 
 
@@ -783,7 +786,8 @@ write_rds(result, "./testing/tau_k_fixed_all.rds")
 
 ```{r tauk_diag_all, eval = FALSE, echo = FALSE}
 #Read in result to display diagnostics
-result <- read_rds("./testing/tau_k_fixed_all.rds")
+result <- read_rds("../sim/result_test_unif.rds")
+#getwd()
 n_iter <- ncol(result$tau_k)
 k <- nrow(result$tau_k)
 set.seed(4)
@@ -887,7 +891,10 @@ apply(result$tau_k, 1, mean) - tau_truth
 summary(apply(result$tau_k, 1, mean) - tau_truth)
 summary(apply(result$tau_k, 1, median) - tau_truth)
 
-cbind(tau_truth, apply(result$tau_k, 1, mean))
+cbind(tau_truth, apply(result$tau_k, 1, mean)) %>%
+  as.data.frame() %>%
+  arrange(desc(tau_truth)) %>%
+  gt::gt()
 
 #MCMC Convergence
 tauk.gg
@@ -1769,7 +1776,7 @@ gwish_ij_update <- function(b, D, omega, i, j, ij_cur) {
 result <- read_rds("../results/2023_02_08_debug_omegak.RDS")
 n_iter <- dim(result$omega_k)[3]
 set.seed(4)
-roi_samp <- sample(dim(result$omega_k)[1], 20) %>% sort()
+roi_samp <- sample(dim(result$omega_k)[1], 5) %>% sort()
 
 #result df
 omegak.df <-
@@ -1816,7 +1823,7 @@ omegak.gg
 
 ```{r gk_accuracy}
 #Set up null matrix of correct dimension to recover full precision for each Kth subject
-p  <- ncol(data_list[[1]])
+p  <- ncol(sim_res$data_list[[1]])
 
 #Function to fill matrix w/upper triangle and make symettric
 fill_mat <- function(res_vec, p) {
@@ -1827,7 +1834,8 @@ fill_mat <- function(res_vec, p) {
   full_precision <- null.mat + t(null_temp.mat)
   return(full_precision)
 }
-
+sim_res$true_params$omega_k -> omegak_truth
+Omega_k <- omegak_truth
 #Process results and summarise
 omegak_acc.df <- 
   omegak.df %>%
@@ -1842,6 +1850,8 @@ omegak_acc.df <-
     mean_mat = map(.x = result, ~fill_mat(.x$post_mean, p)),
     med_mat  = map(.x = result, ~fill_mat(.x$post_median, p)),
     truth    = Omega_k,
+    mean_dif = map2(.x = mean_mat, .y = truth, ~.x - .y),
+    med_dif = map2(.x = med_mat, .y = truth, ~.x - .y),
     mean_abs_dif = map2_dbl(.x = mean_mat, .y = truth, ~mean(abs(.x - .y))),
     med_abs_dif  = map2_dbl(.x = med_mat,  .y = truth, ~mean(abs(.x - .y))),
     mean_sq_dif  = map2_dbl(.x = mean_mat,  .y = truth, ~mean((.x - .y)^2)),
@@ -1851,31 +1861,90 @@ omegak_acc.df <-
   
 #Display mean sq/abs difference based on posterior mean/med
 omegak_acc.df %>%
-  dplyr::select(-c(result, mean_mat:truth))
+  dplyr::select(-c(result, mean_mat:med_dif))
 
 
 #Summary of difference between post-mean/med and original Omega_k's by norm
 norm_types <- c("1", "F", "2")
 
 omegak_acc.df %>%
-  dplyr::select(-contains(c("dif", "result"))) %>%
-  pivot_longer(
-    cols = -c(subject),
-    names_to  = "precision",
-    values_to = "value" 
-  ) %>%
+  dplyr::select(subject, mean_dif, med_dif) %>%
+  # pivot_longer(
+  #   cols = -c(subject),
+  #   names_to  = "precision",
+  #   values_to = "value" 
+  # ) %>%
   mutate(
-    L1_norm   = map_dbl(.x = value, ~norm(.x, type = "1")),
-    F_norm    = map_dbl(.x = value, ~norm(.x, type = "F")),
-    Spectral_norm = map_dbl(.x = value, ~norm(.x, type = "2")) 
+    L1_mean   = map_dbl(.x = mean_dif, ~norm(.x, type = "1")),
+    F_mean    = map_dbl(.x = mean_dif, ~norm(.x, type = "F")),
+    Spec_mean = map_dbl(.x = mean_dif, ~norm(.x, type = "2")),
+    L1_med    = map_dbl(.x = med_dif, ~norm(.x, type = "1")),
+    F_med     = map_dbl(.x = med_dif, ~norm(.x, type = "F")),
+    Spec_med  = map_dbl(.x = med_dif, ~norm(.x, type = "2"))
   ) %>%
-  dplyr::select(-value) %>%
+  dplyr::select(-c(mean_dif, med_dif)) %>%
   # pivot_wider(
   #   id_cols = "subject",
   #   names_from = "precision",
   #   values_from = c(L1_norm:Spectral_norm)
   # ) %>%
-  group_by(subject) %>%
-  gt_preview()
+  #group_by(subject) %>%
+  gt::gt()
+
+omegak_acc.df %>%
+  dplyr::select(subject, mean_dif, med_dif) %>%
+  # pivot_longer(
+  #   cols = -c(subject),
+  #   names_to  = "precision",
+  #   values_to = "value" 
+  # ) %>%
+  mutate(
+    L1_mean   = map_dbl(.x = mean_dif, ~norm(.x, type = "1")),
+    F_mean    = map_dbl(.x = mean_dif, ~norm(.x, type = "F")),
+    Spec_mean = map_dbl(.x = mean_dif, ~norm(.x, type = "2")),
+    L1_med    = map_dbl(.x = med_dif, ~norm(.x, type = "1")),
+    F_med     = map_dbl(.x = med_dif, ~norm(.x, type = "F")),
+    Spec_med  = map_dbl(.x = med_dif, ~norm(.x, type = "2"))
+  ) %>%
+  dplyr::select(-c(mean_dif, med_dif)) %>%
+  pivot_longer(
+    -c(subject),
+    names_to = "norm",
+    values_to = "value"
+  ) %>%
+  group_by(norm) %>%
+  summarise(
+    avg_norm = mean(value),
+    med_norm = median(value),
+    sd_norm  = sd(value)
+  ) %>%
+  gt::gt()
+  # pivot_wider(
+  #   id_cols = "subject",
+  #   names_from = "precision",
+  #   values_from = c(L1_norm:Spectral_norm)
+  # ) %>%
+  #group_by(subject) %>%
+
+# omegak_acc.df %>%
+#   dplyr::select(-contains(c("dif", "result"))) %>%
+#   pivot_longer(
+#     cols = -c(subject),
+#     names_to  = "precision",
+#     values_to = "value" 
+#   ) %>%
+#   mutate(
+#     L1_norm   = map_dbl(.x = value, ~norm(.x, type = "1")),
+#     F_norm    = map_dbl(.x = value, ~norm(.x, type = "F")),
+#     Spectral_norm = map_dbl(.x = value, ~norm(.x, type = "2")) 
+#   ) %>%
+#   dplyr::select(-value) %>%
+#   # pivot_wider(
+#   #   id_cols = "subject",
+#   #   names_from = "precision",
+#   #   values_from = c(L1_norm:Spectral_norm)
+#   # ) %>%
+#   group_by(subject) %>%
+#   gt::gt()
 ```
 

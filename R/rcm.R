@@ -12,13 +12,22 @@
 #' @examples
 #' rcm::example_data_list
 #' rcm(example_data_list)
-rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples = 100, n_burn = 10, n_cores = 4, n_updates = 2) {
-  # sim_res <- sim_data(subjects = 20, volumes = 200, rois = 10, alpha_tau = 25, lambda_2 = 0.5,
+rcm <- function(y = data_list, tau_trunc = c(0, 100), power = 1, priors = NULL, n_samples = 100, n_burn = 10, n_cores = 4, n_updates = 2) {
+  
+  # #power transformation option --> transforms gamma by scale = scale^(-1/power) #100 or 500 volumes
+  # sim_res <- sim_data(subjects = 20, volumes = 200, rois = 10, alpha_tau = 25, lambda_2 = 0.5, #Try one run at wider spread of tau, run 10 on msi
   #                     prop_true_con = 1/5, n_flip = 1, write = FALSE)
-   # y = sim_data.df$data_list[[1]]; priors = NULL; n_samples = 100; n_burn = 0; n_cores = 7; n_updates = 2;
-   # sim_data.df$true_params[[1]]$tau_k -> tau_truth;
-   # sim_data.df$true_params[[1]]$alpha_tau -> alpha_truth;
-   # sim_data.df$true_params[[1]]$lambda_2  -> lam2_truth;
+  # tau_trunc = c(0, 100); power = 1; priors = NULL; n_samples = 2000; n_burn = 500; n_cores = 4; n_updates = 2;
+  # y <- sim_res$data_list
+  # sim_res$true_params$omega_0 -> omega0_truth
+  # sim_res$true_params$omega_k -> omegak_truth
+  # sim_res$true_params$tau_k -> tau_truth
+  # y = sim_data.df$data_list[[1]]; priors = NULL; n_samples = 100; n_burn = 0; n_cores = 7; n_updates = 2;
+  # sim_data.df$true_params[[1]]$tau_k -> tau_truth;
+  # sim_data.df$true_params[[1]]$alpha_tau -> alpha_truth;
+  # sim_data.df$true_params[[1]]$lambda_2  -> lam2_truth;
+  
+  # library(tidyverse)
   # library(Rcpp)
   # library(RcppArmadillo)
   # library(GIGrvg)
@@ -49,7 +58,7 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
   mu_tau    <- 50 #Hyper-mean of tau_k = alpha_tau / lambda_2
   sigma_tau <- 5 #Hyper sd of mean of tau_k, where sd(alpha_tau / lambda_2) = sigma_tau * lambda_2
   lambda_2  <- 1/2 #Fix rate lambda_2
-  alpha_tau <- mu_tau * lambda_2 #Back solve for alpha
+  alpha_tau <- mu_tau * lambda_2^(1/power) #Back solve for alpha
   
   #Check distributions
   #rnorm(1000, mu_tau, sd = sigma_tau) %>% hist() #mean tau_k prior
@@ -87,13 +96,14 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
 
   #Initialize estimates for tau_k
   tau_vec   <- vector(mode = "numeric", length = K)
+  #tau_vec <- runif(K, min = trunc[0], max = trunc[1])
 
   #Iterate over each subject, find optimal tau_k based on posterior in 1D
   for (k in 1:K) {
     #print(k)
     #Tau posterior for fixed omega_k, omega_0, and lambda_2 = 0
     f_opt <- function(tau) {
-      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2, m_iter = 100, trunc = trunc)
+      -1 * log_tau_posterior(tau, omega_k[[k]], sigma_0, alpha_tau = alpha_tau, lambda_2 = lambda_2^(1/power), m_iter = 100, trunc = trunc)
     }
     #Optimize in 1D
     tau_vec[k] <- c(optimize(f_opt, interval = c(1, 99), tol = 0.01)$min)
@@ -116,67 +126,67 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
   # #Optimize in 1D
   # lambda_2 <- c(optimize(f_opt, lower = 0, upper = 10, tol = 0.01)$min)
   
-  #Grid search across alpha_tau and optimize lambda_2
-  mean_search <- 1:99
-  
-  #tau | alpha, \lambda ~ trunc gamma optimize w.r.t. lambda given tau_hat, alpha
-  alpha_lam_opt <- function(mean) {
-    f_opt <- function(lambda_2) {
-      sum(
-        map_dbl(
-          .x = tau_vec,
-          ~log(truncdist::dtrunc(spec = "gamma",
-                                 a = trunc[1],
-                                 b = trunc[2],
-                                 x = 100 - .x,
-                                 shape = mean * lambda_2,
-                                 rate  = lambda_2))
-        )
-      )
-    }
-    #asdf
-    return(as.data.frame(optimize(f_opt, lower = 0, upper = 10, tol = 0.01, maximum = TRUE)))
-  }
-  
-  #Result
-  alpha_res.df <-
-    tibble(
-      mean   = mean_search,
-      result = map(.x = mean, ~alpha_lam_opt(.x)) 
-    ) %>%
-    unnest(result) %>%
-    rename(lambda = maximum) #%>%
-    # mutate(
-    #   diff = c(NA, diff(objective, lag = 1)), #Stop when diff < 1 in objective function?
-    #   sample = map2(.x = mean,
-    #                 .y = lambda,
-    #                 ~(100 - truncdist::rtrunc(spec = "gamma",
-    #                                           a = trunc[1],
-    #                                           b = trunc[2],
-    #                                           n = 1000,
-    #                                           shape = .x * .y,
-    #                                           rate  = .y))),
-    #   mean_samp = map_dbl(.x = sample, ~mean(.x)),
-    #   sd_samp   = map_dbl(.x = sample, ~sd(.x)),
-    #   sample = map(.x = sample, ~tibble(sample = .x)),
-    #   hist = map(.x = sample, ~ggplot(.x, aes(x = sample)) + geom_histogram(binwidth = 5))
-    # ) 
-  
-  #Select alpha, lambda pair
-  opt.df <-
-    alpha_res.df %>%
-    filter(objective == max(objective))
-  
-  alpha_tau <-
-    opt.df %>%
-    mutate(
-      alpha = mean * lambda
-    ) %>%
-    pull(alpha)
-  
-  lambda_2 <-
-    opt.df %>%
-    pull(lambda)
+  # #Grid search across alpha_tau and optimize lambda_2
+  # mean_search <- 1:99
+  # 
+  # #tau | alpha, \lambda ~ trunc gamma optimize w.r.t. lambda given tau_hat, alpha
+  # alpha_lam_opt <- function(mean) {
+  #   f_opt <- function(lambda_2) {
+  #     sum(
+  #       map_dbl(
+  #         .x = tau_vec,
+  #         ~log(truncdist::dtrunc(spec = "gamma",
+  #                                a = trunc[1],
+  #                                b = trunc[2],
+  #                                x = 100 - .x,
+  #                                shape = mean * lambda_2^(1/power),
+  #                                rate  = lambda_2^(1/power)))
+  #       )
+  #     )
+  #   }
+  #   #asdf
+  #   return(as.data.frame(optimize(f_opt, lower = 0, upper = 10, tol = 0.01, maximum = TRUE)))
+  # }
+  # 
+  # #Result
+  # alpha_res.df <-
+  #   tibble(
+  #     mean   = mean_search,
+  #     result = map(.x = mean, ~alpha_lam_opt(.x)) 
+  #   ) %>%
+  #   unnest(result) %>%
+  #   rename(lambda = maximum) #%>%
+  #   # mutate(
+  #   #   diff = c(NA, diff(objective, lag = 1)), #Stop when diff < 1 in objective function?
+  #   #   sample = map2(.x = mean,
+  #   #                 .y = lambda,
+  #   #                 ~(100 - truncdist::rtrunc(spec = "gamma",
+  #   #                                           a = trunc[1],
+  #   #                                           b = trunc[2],
+  #   #                                           n = 1000,
+  #   #                                           shape = .x * .y,
+  #   #                                           rate  = .y))),
+  #   #   mean_samp = map_dbl(.x = sample, ~mean(.x)),
+  #   #   sd_samp   = map_dbl(.x = sample, ~sd(.x)),
+  #   #   sample = map(.x = sample, ~tibble(sample = .x)),
+  #   #   hist = map(.x = sample, ~ggplot(.x, aes(x = sample)) + geom_histogram(binwidth = 5))
+  #   # ) 
+  # 
+  # #Select alpha, lambda pair
+  # opt.df <-
+  #   alpha_res.df %>%
+  #   filter(objective == max(objective))
+  # 
+  # alpha_tau <-
+  #   opt.df %>%
+  #   mutate(
+  #     alpha = mean * lambda^(1/power)
+  #   ) %>%
+  #   pull(alpha)
+  # 
+  # lambda_2 <-
+  #   opt.df %>%
+  #   pull(lambda)
   
   #Set up storage for results
   #Omegas
@@ -222,11 +232,11 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
 
     #Lambda 2 Gamma rate parameter for df/shrinkage tau_k prior
     #lambda_2 <- rgamma(1, alpha[2] + K + 1, beta[2] + sum(tau_vec))
-    lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
-                                     mu_tau, sigma_tau, window = step_lambda2,
-                                     trunc = trunc, ebayes = TRUE)
-    lambda_2       <- lambda_next$lambda_2
-    accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
+    # lambda_next    <- lambda2_update(lambda_2, alpha_tau, tau_vec,
+    #                                  mu_tau, sigma_tau, window = step_lambda2,
+    #                                  trunc = trunc, ebayes = TRUE)
+    # lambda_2       <- lambda_next$lambda_2
+    # accept_lambda2 <- rbind(accept_lambda2, lambda_next$accept)
 
     #Lambda 3 Sparse L-1 penalty on group precision omega_0 prior
     card_0 <- (sum(abs(omega_0) > 0.001) + p) / 2 #Cardinality omega_0 / # Edges or non-zero elements
@@ -307,10 +317,11 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
 
 
     #Tau_k update
+    #lambda <- lambda^(1/power) #1/lambda^(1/power) power transformation --> power root scale
     tau_k <-
       map(
         .x = 1:K, #Iterate from index 1 to Ktau_k, omega_k, sigma_0, alpha_tau, lambda_2, window
-        ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2, step_tau[.x], trunc = trunc)
+        ~tau_update(tau_vec[.x], omega_k[[.x]], sigma_0, alpha_tau, lambda_2^(1/power), step_tau[.x], trunc = trunc)
       ) #Return list object
     # for (k in 1:K) {
     #   print(paste0("sub: ", k))
@@ -335,19 +346,19 @@ rcm <- function(y = data_list, tau_trunc = c(0, 100), priors = NULL, n_samples =
          accept_tau    <- matrix(NA, nrow = 0, ncol = K) #Restart acceptance rate tracking
      }
     
-    #Adaptive lambda_2 step-size/window for MH proposal
-    if (t %% n_updates == 0 & t <= n_burn) {
-      #Compute acceptance rate (colwise mean)
-      accept_rate <- apply(accept_lambda2, 2, mean)
-
-      if (accept_rate > 0.75) { #If accepting to many, inc variance of proposal
-        step_lambda2  <- min(1, step_lambda2 + 0.01)
-      } else if (accept_rate < 0.5) { #If not accepting enough, dec variance of proposal
-        step_lambda2  <- max(0.01, step_lambda2 - 0.01)
-      }
-    }
-    step_lam2_mat  <- rbind(step_lam2_mat, step_lambda2) #Record adaptive step sizes
-    accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1) #Restart acceptance rate tracking
+    # #Adaptive lambda_2 step-size/window for MH proposal
+    # if (t %% n_updates == 0 & t <= n_burn) {
+    #   #Compute acceptance rate (colwise mean)
+    #   accept_rate <- apply(accept_lambda2, 2, mean)
+    # 
+    #   if (accept_rate > 0.75) { #If accepting to many, inc variance of proposal
+    #     step_lambda2  <- min(1, step_lambda2 + 0.01)
+    #   } else if (accept_rate < 0.5) { #If not accepting enough, dec variance of proposal
+    #     step_lambda2  <- max(0.01, step_lambda2 - 0.01)
+    #   }
+    # }
+    # step_lam2_mat  <- rbind(step_lam2_mat, step_lambda2) #Record adaptive step sizes
+    # accept_lambda2 <- matrix(NA, nrow = 0, ncol = 1) #Restart acceptance rate tracking
     
     #Old alpha update
     #alpha_next <- alpha_update(alpha_tau, tau_vec, lambda_2, mu_tau, sigma_tau, window = step_alpha)

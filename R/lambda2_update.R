@@ -13,7 +13,7 @@
 #'
 #' @examples
 #' lambda2_update(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, window, trunc = c(0, 100))
-lambda2_update <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, window, trunc = c(0, 100), ebayes = FALSE) {
+lambda2_update <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, window, trunc = c(0, 100), ebayes = FALSE, power = 1) {
   
    # alpha_tau = 50; tau_vec = runif(20, 0, 100); lambda_2 = 1; mu_tau = 30; sigma_tau = 3; trunc = c(0, 100);
    # window = 0.1;
@@ -49,7 +49,7 @@ lambda2_update <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, wind
 
 }
 
-log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, trunc = c(0, 100), type = "mode", ebayes = FALSE) {
+log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau, trunc = c(0, 100), type = "mode", ebayes = FALSE, power = 1) {
   #Parameters
   nu    <- pmax(trunc[2] - tau_vec, trunc[1] + 0.000000001)
   k     <- length(nu)
@@ -60,7 +60,7 @@ log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau
   log_tau <- map_dbl(
               .x = nu, 
               ~truncdist::dtrunc(spec = "gamma", x = .x, a = trunc[1], b = trunc[2],
-                                 shape = alpha_tau, rate = lambda_2, log = TRUE)
+                                 shape = alpha_tau, rate = lambda_2, log = TRUE) #update power transform
              )
 
   #Alpha prior log pdf 
@@ -76,7 +76,7 @@ log_lambda_posterior <- function(lambda_2, alpha_tau, tau_vec, mu_tau, sigma_tau
   
   
   #Lambda prior log pdf
-  log_lambda <- dgamma(lambda_2, shape = 1, rate = 1/10, log = TRUE)
+  log_lambda <- dgamma(lambda_2, shape = 1, rate = 1/10, log = TRUE) # 1/power or power?
   
   #Sum/*k for log posterior pdf
   if(ebayes) {

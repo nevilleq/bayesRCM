@@ -64,21 +64,25 @@ log_tau_posterior <- function(tau_k, omega_k, sigma_0, alpha_tau, lambda_2, trun
   b   <- max(tau_k, 3)
   D   <- sigma_0 * tau_k 
   #nu  <- max(trunc[2] - tau_k, trunc[1] + 0.000000001)
-  nu  <- max(trunc[2] - tau_k, trunc[1])
+ # nu  <- max(trunc[2] - tau_k, trunc[1])
+  nu <- tau_k
   adj <- abs(omega_k) > 0.001 
   tri_adj <- adj
   tri_adj[lower.tri(tri_adj, diag = T)] <- 0
+  
+  #CHECK THE POWER TRANFORM IMPACT ON POSTERIOR, I.E. FLATTER TAU --> MORE WEIGHT ON gWISH/DATA
   
   #Log-Gwish (un-normalized)
   log_gwish <- ((b - 2) / 2) * log(matdet(omega_k)) - (mattr(matprod(D, omega_k)) / 2)
   #print(paste0("unnormalized log_gwish: ", log_gwish))
   
   #Gwish prior
-  log_tau   <- log(truncdist::dtrunc(spec = "gamma", x = nu, a = trunc[1], b = trunc[2], shape = alpha_tau, rate = lambda_2))
+  #log_tau   <- log(truncdist::dtrunc(spec = "gamma", x = nu, a = trunc[1], b = trunc[2], shape = alpha_tau, rate = lambda_2))
+  log_tau <- log(dunif(nu, min = trunc[1], max = trunc[2])) 
   #print(paste0("log_tau: ", log_tau))
   
   #G-wish normalizing const. approx
-  log_gwish_norm <- BDgraph::gnorm(tri_adj, b = b, D = D, iter = m_iter)
+  log_gwish_norm <- BDgraph::gnorm(tri_adj, b = b, D = D, iter = m_iter) #see it's impact on the transition steps
   #print(paste0("norm_const: ", log_gwish_norm))
   
   

@@ -35,7 +35,7 @@ sim_settings.df <- read_rds(str_c(in_path, in_grid, sep = "/"))
 #bash_args <- commandArgs(trailingOnly = TRUE)
 #sim_iter  <- as.integer(as.numeric(bash_args[1])) #sim iteration
 #sim_set   <- as.integer(as.numeric(bash_args[2])) #setting number (1-8), 2/4 100 & 500 vols high outlier
-sim_set   <- 2
+sim_set   <- 4
 sim_iter  <- 1:10
 
 #Read in all sim data
@@ -137,8 +137,8 @@ print(sprintf("Run: %i/%i", n, length(sim_iter)))
       #} else {
       #  1 = 2
       #}
-      bayesRCM::rcm(y, n_samples = 100, n_burn = 0, n_cores = n_cores, n_updates = 0)
-      #bayesRCM::rcm(y, n_samples = 4000, n_burn = 1000, n_cores = n_cores, n_updates = 10)
+      #bayesRCM::rcm(y, n_samples = 100, n_burn = 0, n_cores = n_cores, n_updates = 0)
+      bayesRCM::rcm(y, n_samples = 4000, n_burn = 1000, n_cores = n_cores, n_updates = 10)
       #return(result)
       }, error = function(e){
         cat("Error in bayesRCM::rcm(), likely in subject updates", "\n", conditionMessage(e), "\n")

@@ -32,9 +32,11 @@ in_grid <- list.files("./sim/sim_data/", pattern = "grid")
 sim_settings.df <- read_rds(str_c(in_path, in_grid, sep = "/"))
 
 #Bash arguments for msi slurm iteration
-bash_args <- commandArgs(trailingOnly = TRUE)
+#bash_args <- commandArgs(trailingOnly = TRUE)
 sim_iter  <- as.integer(as.numeric(bash_args[1])) #sim iteration
 sim_set   <- as.integer(as.numeric(bash_args[2])) #setting number (1-8), 2/4 100 & 500 vols high outlier
+#sim_iter <- 1
+#sim_set <- 1
 
 #Read in all sim data
 sim_data.df <-
@@ -111,7 +113,8 @@ write <- TRUE
     with(
       sim_data.df,
       paste0("setting", setting[n],
-             "_seed", seed[n])
+             "_seed", seed[n],
+             "_unif")
     )
   
   #Grab data & dimensions
@@ -131,8 +134,8 @@ write <- TRUE
       #} else {
       #  1 = 2
       #}
-      bayesRCM::rcm(y, n_samples = 100, n_burn = 0, n_cores = n_cores, n_updates = 0)
-      #bayesRCM::rcm(y, n_samples = 4000, n_burn = 1000, n_cores = n_cores, n_updates = 10)
+      #bayesRCM::rcm(y, n_samples = 100, n_burn = 0, n_cores = n_cores, n_updates = 0)
+      bayesRCM::rcm(y, n_samples = 4000, n_burn = 1000, n_cores = n_cores, n_updates = 10)
       #return(result)
       }, error = function(e){
         cat("Error in bayesRCM::rcm(), likely in subject updates", "\n", conditionMessage(e), "\n")
@@ -260,7 +263,8 @@ sim_res.df <-
         with(
             sim_res.df,
             paste0("setting", setting[n],
-                          "_seed", seed[n])
+                          "_seed", seed[n],
+                          "_unif")
         )
 
 #True parameters
